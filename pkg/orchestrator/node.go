@@ -26,9 +26,14 @@ type NodeResult struct {
 	Interrupt bool // true means pause and wait for external input
 }
 
-// ExecutionSnapshot captures execution state at a point in time.
-// Full definition is in pkg/orchestrator/executor.
+// ExecutionSnapshot captures execution state at an interrupt point.
+// Full lifecycle management is in pkg/orchestrator/executor.
 type ExecutionSnapshot struct {
-	NodeID string
-	Status string
+	ExecutionID string
+	CurrentNode string
+	Step        int
+	WorkMem     interface{} // *context.WorkingMemory
+	ConvMem     interface{} // *context.ConversationMemory
+	GraphHash   string
+	CreatedAt   interface{} // time.Time
 }
