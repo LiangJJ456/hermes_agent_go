@@ -1,6 +1,6 @@
 # Hermes Agent Go
 
-A production-grade AI agent framework written in Go, featuring a multi-layer memory architecture (MemPalace), hybrid vector + BM25 search, MCP (Model Context Protocol) integration, and a parallel tool execution engine.
+A production-grade AI agent framework written in Go, featuring JSON-defined graph-based orchestration, multi-layer memory architecture (MemPalace), hybrid vector + BM25 search, MCP (Model Context Protocol) integration, and human-in-the-loop support.
 
 ## Table of Contents
 
@@ -32,15 +32,18 @@ A production-grade AI agent framework written in Go, featuring a multi-layer mem
                          |
 +------------------------v------------------------------+
 |                   AIAgent                             |
-|  +-------------+ +--------------+ +---------------+  |
-|  | Model Router| | Tool Registry| | Budget Tracker|  |
-|  | (OpenAI/...)| | (Builtin+MCP)| | (90 iters)   |  |
-|  +------+------+ +------+-------+ +---------------+  |
-|         |               |                             |
-|  +------v---------------v------------------------+   |
-|  |           Parallel Tool Executor              |   |
-|  |         (max 8 concurrent calls)              |   |
-|  +-----------------------------------------------+   |
+|  +-------------------------------------------------+ |
+|  |          Graph Executor (pkg/orchestrator)       | |
+|  |  LLM -> Choice -> Parallel(Tools) -> LLM -> End | |
+|  |  (JSON-defined DAG, 6 node types, retry/catch)  | |
+|  +-------------------------------------------------+ |
+|         |                     |                       |
+|  +------v------+  +-----------v------------------+   |
+|  | LLMInvoker  |  | ToolInvoker                  |   |
+|  | (model      |  | (tool.Registry +              |   |
+|  |  .Router)   |  |  memory.Manager               |   |
+|  +-------------+  |  + ask_human (HITL))          |   |
+|                   +-------------------------------+   |
 |                                                       |
 |  +-----------------------------------------------+   |
 |  |            Memory Manager                     |   |
@@ -170,10 +173,10 @@ Create `~/.hermes/mcp.json`:
 
 | Command | Description |
 |---|---|
-| `/quit` or `/exit` | Gracefully close the agent, MCP servers, and exit |
+| `/quit` or `/exit` | Gracefully close the agent, persist messages, and exit |
 | `/stats` | Show session statistics (iterations, tool calls, token usage) |
 | `/budget` | Display remaining iteration budget |
-| `/todo` | Show the current TODO plan and progress |
+| `/todo` | Show current TODO/planning list |
 | `/mcp` | List connected MCP servers and their registered tools |
 
 Any other input is treated as a natural-language message sent to the agent.
@@ -188,9 +191,12 @@ hermes_agent_go/
 |   +-- main.go                 # Entry point and REPL
 +-- pkg/
 |   +-- agent/
-|   |   +-- agent.go            # Core agent loop (think -> act -> observe)
-|   |   +-- budget.go           # Iteration budget tracker
-|   |   +-- parallel.go         # Parallel tool executor
+|   |   +-- agent.go            # Core agent (graph executor based)
+|   |   +-- graph_builder.go    # Default agent graph definition
+|   |   +-- event_tracer.go     # Tracer -> EventCallback bridge
+|   |   +-- adapters/
+|   |   |   +-- llm_invoker.go  # model.Router -> LLMInvoker
+|   |   |   +-- tool_invoker.go # tool.Registry -> ToolInvoker
 |   |   +-- prompt/
 |   |   |   +-- builder.go      # System prompt construction
 |   |   +-- context/
@@ -204,11 +210,33 @@ hermes_agent_go/
 |   |       +-- builtin.go      # Built-in memory provider
 |   |       +-- mempalace/
 |   |           +-- doc.go          # Package documentation
-|   |           +-- provider.go     # MemPalace provider (838 lines)
+|   |           +-- provider.go     # MemPalace provider
 |   |           +-- layers.go       # 4-layer memory stack
 |   |           +-- drawer.go       # Drawer store with callbacks
 |   |           +-- searcher.go     # Hybrid BM25 + ChromaDB search
 |   |           +-- knowledge_graph.go  # Temporal knowledge graph
+|   +-- orchestrator/           # Graph-based orchestration engine
+|   |   +-- node.go             # NodeRunner interface + NodeResult
+|   |   +-- graph.go            # Graph, NodeSpec, EdgeSpec types
+|   |   +-- graph_json.go       # JSON two-phase graph loading
+|   |   +-- registry.go         # Thread-safe type registry
+|   |   +-- tracer.go           # Tracer interface + NopTracer
+|   |   +-- executor/
+|   |   |   +-- executor.go     # Graph walker (retry/catch/interrupt)
+|   |   |   +-- route.go        # Edge routing with priority
+|   |   |   +-- stream.go       # ExecuteStream wrapper
+|   |   +-- runner/
+|   |   |   +-- llm.go          # LLMRunner + LLMInvoker
+|   |   |   +-- tool.go         # ToolRunner + ToolInvoker
+|   |   |   +-- choice.go       # ChoiceRunner (condition branch)
+|   |   |   +-- parallel.go     # ParallelRunner (concurrent)
+|   |   |   +-- human.go        # HumanRunner (HITL interrupt)
+|   |   |   +-- end.go          # EndRunner (terminal)
+|   |   +-- context/
+|   |   |   +-- execution.go    # ExecutionContext / WorkingMemory
+|   |   |   +-- memory.go       # ConversationMemory / MemoryStore
+|   |   +-- schema/
+|   |       +-- pipe.go         # Pipe / StreamReader / StreamWriter
 |   +-- model/
 |   |   +-- provider.go         # Model provider interface
 |   |   +-- router.go           # Multi-provider model router
@@ -258,23 +286,37 @@ hermes_agent_go/
 
 ### Agent Loop
 
-Hermes uses a **ReAct (Reasoning + Acting)** agent loop:
+Hermes uses a **JSON-defined Graph** for agent orchestration. The default graph implements a ReAct-style loop:
 
 ```
-+---------+    +----------+    +---------+    +-------------+
-|  Think  |--->| Act      |--->| Observe |--->| Continue?   |
-|  (LLM)  |    | (Tools)  |    | (Result)|    | (Budget OK) |
-+---------+    +----------+    +---------+    +------+------+
-     ^                                               |
-     +------------------- yes -----------------------+
+┌──────┐    ┌────────┐    ┌──────────────────┐
+│ LLM  │───→│ Choice │───→│ Parallel(Tool...) │──┐
+└──────┘    └───┬────┘    └──────────────────┘  │
+                │ no tool_calls                  │
+                ▼                                │
+            ┌──────┐                             │
+            │ End  │                             │
+            └──────┘    ◄────────────────────────┘
 ```
 
-1. **Think**: The LLM receives the conversation history + system prompt (including memory) and decides what to do next.
-2. **Act**: If the LLM requests tool calls, they are executed -- up to **8 in parallel** when independent.
-3. **Observe**: Tool results are appended to the conversation.
-4. **Budget Check**: The loop continues until the LLM produces a final text response, or the iteration budget (default **90**) is exhausted.
+The graph engine (`pkg/orchestrator/`) supports 6 node types:
+
+| Node | Description |
+|---|---|
+| `llm` | Invokes the LLM via `LLMInvoker` interface, streams deltas |
+| `choice` | Routes to next node based on JSON conditions (e.g. `has_tool_calls`) |
+| `tool` | Executes a tool via `ToolInvoker`, including `ask_human` for HITL |
+| `parallel` | Runs multiple sub-graph branches concurrently |
+| `human` | Pauses execution and waits for human input (returns `Interrupt`) |
+| `end` | Terminates the graph, returns output |
+
+Each node supports **retry** (exponential backoff with jitter) and **catch** (error routing to fallback nodes). The graph is defined as JSON and can be overridden by users via config.
 
 Sub-agent delegation is supported up to **2 levels deep**, with delegated agents limited to **50 iterations** each.
+
+#### Human-in-the-Loop
+
+When the LLM calls `ask_human(question, options)`, the executor pauses and returns an `ExecutionSnapshot`. The caller presents the question to the user, collects the response, and calls `executor.Resume(snapshot, response)`. Snapshots are persisted to SessionDB for crash-safe recovery.
 
 ### MemPalace 4-Layer Memory
 
@@ -423,6 +465,24 @@ AgentConfig{
 ```
 
 All values can be overridden via environment variables or programmatic configuration.
+
+Configuration is loaded from (in priority order: env > config file > defaults):
+1. `hermes.yaml` or `hermes.json` in the current directory
+2. `~/.hermes/config.yaml` or `~/.hermes/config.json`
+
+YAML example with custom provider:
+
+```yaml
+model: "doubao/ep-20260415120037-dtjmn"
+custom_providers:
+- name: doubao
+  base_url: https://your-api.example.com/v1
+  api_key: your-api-key
+  model: ep-20260415120037-dtjmn
+  models:
+    ep-20260415120037-dtjmn:
+      context_length: 300000
+```
 
 ---
 
