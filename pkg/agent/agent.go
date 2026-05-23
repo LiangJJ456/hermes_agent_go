@@ -8,12 +8,16 @@ import (
 	"sync"
 	"time"
 
+	"code.byted.org/ad_creative/hermes_agent_go/pkg/agent/adapters"
 	agentctx "code.byted.org/ad_creative/hermes_agent_go/pkg/agent/context"
 	"code.byted.org/ad_creative/hermes_agent_go/pkg/agent/memory"
 	"code.byted.org/ad_creative/hermes_agent_go/pkg/agent/prompt"
 	"code.byted.org/ad_creative/hermes_agent_go/pkg/errx"
-	"code.byted.org/ad_creative/hermes_agent_go/pkg/log"
 	"code.byted.org/ad_creative/hermes_agent_go/pkg/model"
+	"code.byted.org/ad_creative/hermes_agent_go/pkg/orchestrator"
+	orchcontext "code.byted.org/ad_creative/hermes_agent_go/pkg/orchestrator/context"
+	orchexec "code.byted.org/ad_creative/hermes_agent_go/pkg/orchestrator/executor"
+	orchrunner "code.byted.org/ad_creative/hermes_agent_go/pkg/orchestrator/runner"
 	"code.byted.org/ad_creative/hermes_agent_go/pkg/tool/builtin"
 	"code.byted.org/ad_creative/hermes_agent_go/pkg/tool/registry"
 	"code.byted.org/ad_creative/hermes_agent_go/pkg/types"
@@ -50,13 +54,18 @@ type AIAgent struct {
 	config   types.AgentConfig
 	router   *model.Router
 	registry *registry.Registry
-	budget   *IterationBudget
-	executor *ParallelExecutor
+
+	// Orchestrator
+	graph       *orchestrator.Graph
+	executor    *orchexec.Executor
+	llmInvoker  *adapters.RouterAdapter
+	toolInvoker *adapters.RegistryAdapter
 
 	// 对话状态
 	mu       sync.Mutex
 	messages []types.Message
-	turnNum  int // 当前轮次
+	convMem  *orchcontext.ConversationMemory
+	turnNum  int
 
 	// 上下文管理
 	promptBuilder *prompt.Builder
@@ -79,8 +88,8 @@ type AIAgent struct {
 	activeSkills map[string]bool
 
 	// 子 Agent 控制
-	depth    int  // 当前委托深度
-	isChild  bool // 是否是子 Agent
+	depth   int
+	isChild bool
 }
 
 // Stats 运行统计
@@ -95,8 +104,6 @@ type Stats struct {
 
 // NewAIAgent 创建 Agent
 func NewAIAgent(cfg types.AgentConfig, router *model.Router, reg *registry.Registry) *AIAgent {
-	budget := NewIterationBudget(cfg.MaxIterations)
-
 	workDir := cfg.WorkDir
 	if workDir == "" {
 		workDir = "."
@@ -104,26 +111,72 @@ func NewAIAgent(cfg types.AgentConfig, router *model.Router, reg *registry.Regis
 
 	pb := prompt.NewBuilder(cfg.Platform, cfg.Model, workDir)
 
+	// Build default graph
+	var graph *orchestrator.Graph
+	var err error
+	graph, err = BuildDefaultGraph(cfg)
+	if err != nil {
+		// Fallback: minimal graph
+		graph = &orchestrator.Graph{
+			StartAt: "end",
+			Nodes: map[string]*orchestrator.NodeSpec{
+				"end": {Type: "end"},
+			},
+		}
+	}
+
 	a := &AIAgent{
 		config:        cfg,
 		router:        router,
 		registry:      reg,
-		budget:        budget,
-		executor:      NewParallelExecutor(reg, cfg.MaxParallelTools),
+		graph:         graph,
+		executor:      orchexec.NewExecutor(nil), // tracer set later via SetEventCallback
 		promptBuilder: pb,
+		convMem:       &orchcontext.ConversationMemory{SessionID: cfg.SessionID},
 		stats:         Stats{StartTime: time.Now()},
 	}
 
-	budget.SetOnExhaust(func() {
-		a.emitEvent(Event{Type: EventBudgetWarn, Content: "iteration budget exhausted"})
-	})
+	// Build adapters
+	a.llmInvoker = &adapters.RouterAdapter{
+		Router:    router,
+		Registry:  reg,
+		Config:    cfg,
+		MemoryMgr: nil, // set after SetMemoryManager
+	}
+	a.toolInvoker = &adapters.RegistryAdapter{
+		Registry:  reg,
+		MemoryMgr: nil, // set after SetMemoryManager
+	}
+
+	// Wire invokers to runners
+	a.wireRunners()
 
 	return a
+}
+
+// wireRunners connects adapters to orchestrator runners.
+func (a *AIAgent) wireRunners() {
+	if entry, ok := orchestrator.LookupNodeType("llm"); ok {
+		if r, ok := entry.Runner.(*orchrunner.LLMRunner); ok {
+			r.SetInvoker(a.llmInvoker)
+		}
+	}
+	if entry, ok := orchestrator.LookupNodeType("tool"); ok {
+		if r, ok := entry.Runner.(*orchrunner.ToolRunner); ok {
+			r.SetInvoker(a.toolInvoker)
+		}
+	}
+	if entry, ok := orchestrator.LookupNodeType("parallel"); ok {
+		if r, ok := entry.Runner.(*orchrunner.ParallelRunner); ok {
+			r.SetExecutor(a.executor)
+		}
+	}
 }
 
 // SetEventCallback 设置事件回调
 func (a *AIAgent) SetEventCallback(cb EventCallback) {
 	a.eventCB = cb
+	a.executor.Tracer = &eventTracer{cb: cb}
 }
 
 // SetCustomPrompt 设置自定义系统提示
@@ -255,6 +308,8 @@ func toolErrJSON(format string, a ...any) string {
 // SetMemoryManager 设置记忆管理器
 func (a *AIAgent) SetMemoryManager(mgr *memory.Manager) {
 	a.memoryMgr = mgr
+	a.llmInvoker.MemoryMgr = mgr
+	a.toolInvoker.MemoryMgr = mgr
 }
 
 // MemoryManager 获取记忆管理器
@@ -272,25 +327,24 @@ func (a *AIAgent) TodoStore() *builtin.TodoStore {
 	return a.todoStore
 }
 
-// Run 执行一次完整对话，返回最终 assistant 回复
-func (a *AIAgent) Run(ctx context.Context, userInput string) (string, error) {
+// Run executes one turn of the agent loop using the graph executor.
+// Returns (reply, pending, error). pending=true means waiting for human input.
+func (a *AIAgent) Run(ctx context.Context, userInput string) (string, bool, error) {
 	a.mu.Lock()
 
-	// 首次运行：初始化
+	// First run: initialize system prompt
 	if len(a.messages) == 0 {
-		// 注入记忆系统的 system prompt 块
 		if a.memoryMgr != nil {
 			memPrompt := a.memoryMgr.BuildSystemPrompt()
 			if memPrompt != "" {
 				a.promptBuilder.SetMemoryContext(memPrompt)
 			}
 		}
-
 		sysMsg := a.promptBuilder.Build()
 		a.messages = []types.Message{sysMsg}
 	}
 
-	// 追加用户消息
+	// Append user message
 	a.messages = append(a.messages, types.Message{
 		Role:      types.RoleUser,
 		Content:   userInput,
@@ -299,333 +353,82 @@ func (a *AIAgent) Run(ctx context.Context, userInput string) (string, error) {
 	a.turnNum++
 	a.mu.Unlock()
 
-	// pre-turn: 记忆预取
+	// PRE: memory prefetch — called ONCE with real user input (BUG FIX)
 	if a.memoryMgr != nil {
 		a.memoryMgr.OnTurnStart(a.turnNum, userInput, nil)
 		memCtx := a.memoryMgr.PrefetchAll(ctx, userInput, a.config.SessionID)
 		if memCtx != "" {
-			// 构建围栏上下文块，注入到最新消息前（API 调用时注入，不持久化）
 			a.emitEvent(Event{Type: EventMemory, Content: "memory context recalled"})
-			_ = memCtx // 上下文注入在 conversationLoop 中处理
+			// Inject into conversation memory as a system message before the user message
+			contextBlock := memory.BuildContextBlock(memCtx)
+			if contextBlock != "" {
+				a.convMem.AddMessage(orchcontext.Message{
+					Role:    "system",
+					Content: contextBlock,
+				})
+			}
 		}
 	}
 
-	// 核心对话循环
-	reply, err := a.conversationLoop(ctx)
+	// Sync messages to ConversationMemory for the executor
+	a.mu.Lock()
+	a.convMem.Messages = messagesToOrchMessages(a.messages)
+	a.mu.Unlock()
 
-	// post-turn: 同步记忆
-	if err == nil && a.memoryMgr != nil {
+	// Set system prompt on the LLM node
+	if llmNode, ok := a.graph.Nodes["llm"]; ok {
+		if llmCfg, ok := llmNode.ParsedConfig.(*orchrunner.LLMConfig); ok {
+			sysPrompt := a.promptBuilder.Build().Content
+			llmCfg.SystemPrompt = sysPrompt
+		}
+	}
+
+	// Execute the graph
+	output, snap, err := a.executor.Execute(ctx, a.graph, userInput)
+	if err != nil {
+		return "", false, err
+	}
+
+	// Handle interrupt (human-in-the-loop)
+	if snap != nil {
+		reply := formatOutput(output)
+		return reply, true, nil
+	}
+
+	// POST: extract reply and sync memory
+	reply := formatOutput(output)
+
+	// Add assistant response to message history
+	a.mu.Lock()
+	if outputMap, ok := output.(map[string]interface{}); ok {
+		if content, ok := outputMap["content"].(string); ok && content != "" {
+			a.messages = append(a.messages, types.Message{
+				Role:      types.RoleAssistant,
+				Content:   content,
+				Timestamp: time.Now(),
+			})
+		}
+	}
+	a.mu.Unlock()
+
+	if a.memoryMgr != nil {
 		a.memoryMgr.SyncAll(userInput, reply, a.config.SessionID)
 		a.memoryMgr.QueuePrefetchAll(userInput, a.config.SessionID)
 	}
 
-	return reply, err
+	return reply, false, nil
 }
 
-// conversationLoop 核心对话循环
-func (a *AIAgent) conversationLoop(ctx context.Context) (string, error) {
-	provider, modelName, err := a.router.Resolve(a.config.Model)
+// Resume continues execution after human input.
+func (a *AIAgent) Resume(ctx context.Context, humanResponse interface{}) (string, bool, error) {
+	output, snap, err := a.executor.Resume(ctx, a.graph, nil, humanResponse)
 	if err != nil {
-		return "", fmt.Errorf("resolve model: %w", err)
+		return "", false, err
 	}
-
-	// 获取工具 Schema
-	toolSchemas := a.registry.GetSchemas(a.config.EnabledToolsets, a.config.DisabledTools)
-
-	// 合并记忆工具 Schema（修复 BUG: 之前未将记忆工具暴露给模型）
-	if a.memoryMgr != nil {
-		for _, ms := range a.memoryMgr.GetAllToolSchemas() {
-			paramsJSON, _ := json.Marshal(ms.Parameters)
-			toolSchemas = append(toolSchemas, types.ToolSchema{
-				Type: "function",
-				Function: types.FunctionSchema{
-					Name:        ms.Name,
-					Description: ms.Description,
-					Parameters:  paramsJSON,
-				},
-			})
-		}
+	if snap != nil {
+		return formatOutput(output), true, nil
 	}
-
-	for {
-		// 检查上下文取消
-		select {
-		case <-ctx.Done():
-			return "", ctx.Err()
-		default:
-		}
-
-		// 检查预算
-		if a.budget.Remaining() <= 0 {
-			return "", errx.ErrBudgetExhausted
-		}
-
-		// 上下文压缩检查
-		a.maybeCompress(ctx)
-
-		// 构建请求
-		a.mu.Lock()
-		msgs := make([]types.Message, len(a.messages))
-		copy(msgs, a.messages)
-		a.mu.Unlock()
-
-		// 注入记忆预取上下文（在 API 调用时注入，不持久化到 a.messages）
-		if a.memoryMgr != nil {
-			memCtx := a.memoryMgr.PrefetchAll(ctx, "", a.config.SessionID)
-			if memCtx != "" {
-				contextBlock := memory.BuildContextBlock(memCtx)
-				if contextBlock != "" {
-					// 在用户消息之前插入一条记忆上下文消息
-					injected := make([]types.Message, 0, len(msgs)+1)
-					// 找到最后一条用户消息的位置
-					lastUserIdx := -1
-					for i := len(msgs) - 1; i >= 0; i-- {
-						if msgs[i].Role == types.RoleUser {
-							lastUserIdx = i
-							break
-						}
-					}
-					if lastUserIdx > 0 {
-						injected = append(injected, msgs[:lastUserIdx]...)
-						injected = append(injected, types.Message{
-							Role:    types.RoleSystem,
-							Content: contextBlock,
-						})
-						injected = append(injected, msgs[lastUserIdx:]...)
-						msgs = injected
-					}
-				}
-			}
-		}
-
-		// 注入 TODO reminder（临时塞到队尾，不持久化到 a.messages）
-		// 每轮重新生成，反映最新计划状态；持久化历史保持纯 append，前缀稳定，cache 友好
-		if a.todoStore != nil {
-			if todoSummary := a.todoStore.Summary(); todoSummary != "" {
-				msgs = append(msgs, types.Message{
-					Role:    types.RoleSystem,
-					Content: "<todo-reminder>\n" + todoSummary + "\nContinue with the next pending task. Mark it in_progress before starting.\n</todo-reminder>",
-				})
-			}
-		}
-
-		req := &model.ChatRequest{
-			Model:       modelName,
-			Messages:    msgs,
-			Tools:       toolSchemas,
-			Temperature: a.config.Temperature,
-			MaxTokens:   a.config.MaxTokens,
-		}
-
-		// 调用 LLM
-		var resp *types.ChatResponse
-		if a.eventCB != nil {
-			// 流式
-			resp, err = provider.ChatStream(ctx, req, func(delta types.StreamDelta) {
-				if delta.Content != "" {
-					a.emitEvent(Event{
-						Type:    EventStreamDelta,
-						Content: delta.Content,
-					})
-				}
-				if delta.ToolCallStart {
-					a.emitEvent(Event{
-						Type:     EventToolStart,
-						ToolName: delta.ToolCallName,
-						Content:  "streaming tool_call detected",
-					})
-				}
-			})
-		} else {
-			// 同步
-			resp, err = provider.Chat(ctx, req)
-		}
-		if err != nil {
-			return "", fmt.Errorf("LLM call failed: %w", err)
-		}
-
-		// 更新统计
-		a.stats.InputTokens += resp.Usage.PromptTokens
-		a.stats.OutputTokens += resp.Usage.CompletionTokens
-
-		// 追加 assistant 消息
-		assistantMsg := resp.Message
-		assistantMsg.Timestamp = time.Now()
-		a.mu.Lock()
-		a.messages = append(a.messages, assistantMsg)
-		a.mu.Unlock()
-
-		// 判断是否有工具调用
-		if len(assistantMsg.ToolCalls) == 0 {
-			// 无工具调用 → 对话结束
-			a.stats.EndTime = time.Now()
-			return assistantMsg.Content, nil
-		}
-
-		// 消耗预算
-		if !a.budget.Consume() {
-			return "", errx.ErrBudgetExhausted
-		}
-		a.stats.TotalIterations++
-
-		// Budget 预留提醒：剩余 < 5 时注入警告
-		if remaining := a.budget.Remaining(); remaining > 0 && remaining < 5 {
-			a.mu.Lock()
-			a.messages = append(a.messages, types.Message{
-				Role:    types.RoleSystem,
-				Content: fmt.Sprintf("<budget-warning>IMPORTANT: Only %d iterations remaining. Wrap up your current task immediately. Complete or summarize your work, do NOT start new subtasks.</budget-warning>", remaining),
-			})
-			a.mu.Unlock()
-			a.emitEvent(Event{Type: EventBudgetWarn, Content: fmt.Sprintf("budget low: %d remaining", remaining)})
-		}
-
-		// 执行工具调用（包含记忆工具路由）
-		results := a.executeToolCalls(ctx, assistantMsg.ToolCalls)
-
-		// 追加工具结果消息
-		a.mu.Lock()
-		for _, r := range results {
-			a.messages = append(a.messages, types.Message{
-				Role:       types.RoleTool,
-				Content:    r.Result.Content,
-				ToolCallID: r.Result.ToolCallID,
-				Name:       r.Call.Function.Name,
-				Timestamp:  time.Now(),
-			})
-			a.stats.ToolCalls++
-		}
-		a.mu.Unlock()
-
-		// 继续循环，让 LLM 看到工具结果
-	}
-}
-
-// executeToolCalls 执行一批工具调用（可能并行）
-func (a *AIAgent) executeToolCalls(ctx context.Context, calls []types.ToolCall) []toolCallWithResult {
-	// 发出工具开始事件
-	for _, c := range calls {
-		a.emitEvent(Event{
-			Type:     EventToolStart,
-			ToolName: c.Function.Name,
-			ToolArgs: c.Function.Arguments,
-		})
-	}
-
-	// 检查是否有记忆工具调用需要路由到 MemoryManager
-	results := make([]toolCallWithResult, len(calls))
-	var nonMemoryCalls []int // 非记忆工具的索引
-
-	for i, c := range calls {
-		if a.skillMgr != nil && c.Function.Name == "skills" {
-			// skills 工具：per-agent 激活状态，由本 agent 处理（不走全局 registry handler）
-			results[i] = toolCallWithResult{
-				Call: c,
-				Result: types.ToolResult{
-					ToolCallID: c.ID,
-					Content:    a.handleSkillsCall(json.RawMessage(c.Function.Arguments)),
-				},
-			}
-		} else if a.memoryMgr != nil && a.memoryMgr.HasTool(c.Function.Name) {
-			// 记忆工具：直接路由到 MemoryManager
-			var args map[string]any
-			if err := json.Unmarshal([]byte(c.Function.Arguments), &args); err != nil {
-				results[i] = toolCallWithResult{
-					Call: c,
-					Result: types.ToolResult{
-						ToolCallID: c.ID,
-						Content:    fmt.Sprintf("Error: invalid arguments: %v", err),
-						IsError:    true,
-					},
-				}
-				continue
-			}
-
-			output, err := a.memoryMgr.HandleToolCall(ctx, c.Function.Name, args)
-			if err != nil {
-				results[i] = toolCallWithResult{
-					Call: c,
-					Result: types.ToolResult{
-						ToolCallID: c.ID,
-						Content:    fmt.Sprintf("Error: %v", err),
-						IsError:    true,
-					},
-				}
-			} else {
-				results[i] = toolCallWithResult{
-					Call: c,
-					Result: types.ToolResult{
-						ToolCallID: c.ID,
-						Content:    output,
-					},
-				}
-				// 通知外部 Provider 镜像写入
-				action, _ := args["action"].(string)
-				target, _ := args["target"].(string)
-				content, _ := args["content"].(string)
-				if action == "add" || action == "replace" || action == "remove" {
-					a.memoryMgr.OnMemoryWrite(action, target, content)
-				}
-			}
-		} else {
-			nonMemoryCalls = append(nonMemoryCalls, i)
-		}
-	}
-
-	// 非记忆工具：走 ParallelExecutor
-	if len(nonMemoryCalls) > 0 {
-		var batchCalls []types.ToolCall
-		for _, idx := range nonMemoryCalls {
-			batchCalls = append(batchCalls, calls[idx])
-		}
-		batchResults := a.executor.ExecuteBatch(ctx, batchCalls)
-		for j, idx := range nonMemoryCalls {
-			results[idx] = batchResults[j]
-		}
-	}
-
-	// 发出工具完成事件
-	for _, r := range results {
-		a.emitEvent(Event{
-			Type:     EventToolEnd,
-			ToolName: r.Call.Function.Name,
-			Content:  truncateResult(r.Result.Content, 200),
-		})
-	}
-
-	return results
-}
-
-// maybeCompress 上下文压缩检查
-func (a *AIAgent) maybeCompress(ctx context.Context) {
-	if a.compressor == nil {
-		return
-	}
-	a.mu.Lock()
-	msgs := a.messages
-	a.mu.Unlock()
-
-	if !a.compressor.NeedsCompression(msgs) {
-		return
-	}
-
-	// 压缩前通知记忆系统提取洞察
-	if a.memoryMgr != nil {
-		msgMaps := messagesToMaps(msgs)
-		insight := a.memoryMgr.OnPreCompress(msgMaps)
-		_ = insight // TODO: 传递给 compressor 的摘要 prompt
-	}
-
-	a.emitEvent(Event{Type: EventCompression, Content: "compressing context"})
-
-	compressed, err := a.compressor.Compress(ctx, msgs)
-	if err != nil {
-		log.Warn("compression failed", "error", err)
-		return
-	}
-
-	a.mu.Lock()
-	a.messages = compressed
-	a.mu.Unlock()
+	return formatOutput(output), false, nil
 }
 
 // Shutdown 清理退出
@@ -655,11 +458,6 @@ func (a *AIAgent) GetMessages() []types.Message {
 // GetStats 获取运行统计
 func (a *AIAgent) GetStats() Stats {
 	return a.stats
-}
-
-// Budget 获取预算
-func (a *AIAgent) Budget() *IterationBudget {
-	return a.budget
 }
 
 func (a *AIAgent) emitEvent(e Event) {
@@ -743,6 +541,37 @@ func messagesToMaps(msgs []types.Message) []map[string]any {
 		}
 		if m.Name != "" {
 			result[i]["name"] = m.Name
+		}
+	}
+	return result
+}
+
+func formatOutput(output interface{}) string {
+	if output == nil {
+		return ""
+	}
+	if s, ok := output.(string); ok {
+		return s
+	}
+	if m, ok := output.(map[string]interface{}); ok {
+		if content, ok := m["content"].(string); ok {
+			return content
+		}
+		if msg, ok := m["Message"].(string); ok && msg != "" {
+			return msg
+		}
+	}
+	b, _ := json.Marshal(output)
+	return string(b)
+}
+
+func messagesToOrchMessages(msgs []types.Message) []orchcontext.Message {
+	result := make([]orchcontext.Message, len(msgs))
+	for i, m := range msgs {
+		result[i] = orchcontext.Message{
+			Role:    string(m.Role),
+			Content: m.Content,
+			Name:    m.Name,
 		}
 	}
 	return result

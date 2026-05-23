@@ -337,7 +337,7 @@ func main() {
 			continue
 		}
 		if input == "/budget" {
-			fmt.Printf("  Budget: %d/%d remaining\n", ag.Budget().Remaining(), ag.Budget().Max())
+			fmt.Println("  Budget tracking: managed by graph executor (MaxSteps = cfg.MaxIterations)")
 			continue
 		}
 		if input == "/todo" {
@@ -365,7 +365,7 @@ func main() {
 			continue
 		}
 
-		_, err := ag.Run(ctx, input)
+		_, _, err := ag.Run(ctx, input)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "\n❌ Error: %v\n", err)
 			continue

@@ -126,7 +126,7 @@ func (p *Provider) handle(ctx context.Context, rawArgs json.RawMessage) (string,
 	start := time.Now()
 
 	// 运行子 Agent
-	result, err := child.Run(ctx, fullTask)
+	result, _, err := child.Run(ctx, fullTask)
 	if err != nil {
 		elapsed := time.Since(start)
 		log.Warn("child agent failed",
