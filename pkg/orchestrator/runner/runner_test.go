@@ -126,3 +126,20 @@ func TestToolRunnerWithMockInvoker(t *testing.T) {
 		t.Fatalf("expected output 'result', got %v", result.Output)
 	}
 }
+
+func TestHumanRunnerInterrupt(t *testing.T) {
+	r := &HumanRunner{}
+	node := &orchestrator.NodeSpec{
+		Config: json.RawMessage(`{"Prompt":"Approve?","Actions":["yes","no"]}`),
+	}
+	result, err := r.Run(context.Background(), node, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.Interrupt {
+		t.Fatal("expected Interrupt=true")
+	}
+	if result.Status != orchestrator.StatusPending {
+		t.Fatalf("expected status 'pending', got %q", result.Status)
+	}
+}
