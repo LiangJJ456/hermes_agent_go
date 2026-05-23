@@ -9,17 +9,18 @@ import (
 
 	"code.byted.org/ad_creative/hermes_agent_go/pkg/orchestrator"
 	agcontext "code.byted.org/ad_creative/hermes_agent_go/pkg/orchestrator/context"
+	"code.byted.org/ad_creative/hermes_agent_go/pkg/trace"
 )
 
 // Executor walks a Graph, executing nodes and routing between them.
 type Executor struct {
-	Tracer orchestrator.Tracer
+	Tracer trace.Tracer
 }
 
 // NewExecutor creates an executor with the given tracer.
-func NewExecutor(tracer orchestrator.Tracer) *Executor {
+func NewExecutor(tracer trace.Tracer) *Executor {
 	if tracer == nil {
-		tracer = &orchestrator.NopTracer{}
+		tracer = &trace.NopTracer{}
 	}
 	return &Executor{Tracer: tracer}
 }
@@ -104,12 +105,14 @@ func (e *Executor) executeFrom(ctx context.Context, g *orchestrator.Graph,
 			return nil, nil, fmt.Errorf("no runner registered for type %q", node.Type)
 		}
 
-		e.Tracer.OnNodeStart(ctx, currentNode, node.Type, ec.WorkMem.LastResult)
+		// Start span for this node
+		spanCtx, span := e.Tracer.StartNodeSpan(ctx, currentNode, node.Type)
+		span.SetAttribute("step", step)
 
 		// Run with retry
-		result, err := e.runWithRetry(ctx, node, entry.Runner, ec)
+		result, err := e.runWithRetry(spanCtx, node, entry.Runner, ec)
 		if err != nil {
-			e.Tracer.OnNodeEnd(ctx, currentNode, node.Type, nil, err)
+			e.Tracer.EndNodeSpan(span, err)
 			if next := e.matchCatch(node.Catch, err); next != "" {
 				currentNode = next
 				continue
@@ -122,7 +125,7 @@ func (e *Executor) executeFrom(ctx context.Context, g *orchestrator.Graph,
 			return nil, nil, fmt.Errorf("node %q: %w", currentNode, err)
 		}
 
-		e.Tracer.OnNodeEnd(ctx, currentNode, node.Type, result, nil)
+		e.Tracer.EndNodeSpan(span, nil)
 
 		if result.Output != nil {
 			ec.WorkMem.LastResult = result.Output
@@ -148,7 +151,7 @@ func (e *Executor) executeFrom(ctx context.Context, g *orchestrator.Graph,
 			return result.Output, nil, nil
 		}
 
-		next, err := Route(ctx, currentNode, result, g.Edges, ec)
+		next, err := Route(spanCtx, currentNode, result, g.Edges, ec)
 		if err != nil {
 			return nil, nil, fmt.Errorf("route from %q: %w", currentNode, err)
 		}

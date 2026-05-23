@@ -1,6 +1,7 @@
 package log
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"log/slog"
@@ -33,6 +34,12 @@ func Init(logDir string, level slog.Level) {
 	})
 }
 
+// InitWithHandler 使用自定义 Handler 初始化（支持 TracedHandler 等 wrapper）
+func InitWithHandler(h slog.Handler) {
+	logger = slog.New(h)
+	slog.SetDefault(logger)
+}
+
 // L 返回全局 logger
 func L() *slog.Logger {
 	if logger == nil {
@@ -46,6 +53,12 @@ func Debug(msg string, args ...any) { L().Debug(msg, args...) }
 func Info(msg string, args ...any)  { L().Info(msg, args...) }
 func Warn(msg string, args ...any)  { L().Warn(msg, args...) }
 func Error(msg string, args ...any) { L().Error(msg, args...) }
+
+// DebugContext/InfoContext 支持从 ctx 提取 trace 信息
+func DebugContext(ctx context.Context, msg string, args ...any) { L().DebugContext(ctx, msg, args...) }
+func InfoContext(ctx context.Context, msg string, args ...any)  { L().InfoContext(ctx, msg, args...) }
+func WarnContext(ctx context.Context, msg string, args ...any)  { L().WarnContext(ctx, msg, args...) }
+func ErrorContext(ctx context.Context, msg string, args ...any) { L().ErrorContext(ctx, msg, args...) }
 
 // Fatalf 打印后退出
 func Fatalf(format string, args ...any) {

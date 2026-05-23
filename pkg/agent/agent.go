@@ -15,6 +15,7 @@ import (
 	"code.byted.org/ad_creative/hermes_agent_go/pkg/errx"
 	"code.byted.org/ad_creative/hermes_agent_go/pkg/model"
 	"code.byted.org/ad_creative/hermes_agent_go/pkg/orchestrator"
+	"code.byted.org/ad_creative/hermes_agent_go/pkg/trace"
 	orchcontext "code.byted.org/ad_creative/hermes_agent_go/pkg/orchestrator/context"
 	orchexec "code.byted.org/ad_creative/hermes_agent_go/pkg/orchestrator/executor"
 	orchrunner "code.byted.org/ad_creative/hermes_agent_go/pkg/orchestrator/runner"
@@ -176,7 +177,7 @@ func (a *AIAgent) wireRunners() {
 // SetEventCallback 设置事件回调
 func (a *AIAgent) SetEventCallback(cb EventCallback) {
 	a.eventCB = cb
-	a.executor.Tracer = &eventTracer{cb: cb}
+	a.executor.Tracer = newEventTracer(cb, nil)
 }
 
 // SetCustomPrompt 设置自定义系统提示
@@ -330,6 +331,17 @@ func (a *AIAgent) TodoStore() *builtin.TodoStore {
 // Run executes one turn of the agent loop using the graph executor.
 // Returns (reply, pending, error). pending=true means waiting for human input.
 func (a *AIAgent) Run(ctx context.Context, userInput string) (string, bool, error) {
+	// Root span for the entire turn
+	ctx, rootSpan := trace.StartSpan(ctx, fmt.Sprintf("agent_turn_%d", a.turnNum+1), "agent")
+	defer func() {
+		rootSpan.SetAttribute("turn", a.turnNum)
+		if a.executor.Tracer != nil {
+			a.executor.Tracer.EndNodeSpan(rootSpan, nil)
+		} else {
+			rootSpan.End(nil)
+		}
+	}()
+
 	a.mu.Lock()
 
 	// First run: initialize system prompt
