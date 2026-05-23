@@ -15,11 +15,10 @@ func init() {
 	RegisterTools(registry.Global())
 }
 
-// RegisterTools 注册Web工具到全局注册表
+// RegisterTools registers web tools into the global registry.
 func RegisterTools(reg *registry.Registry) {
 	webTool := NewWebTool()
 
-	// web_get
 	reg.Register(&registry.ToolEntry{
 		Name:    "web_get",
 		Toolset: toolsetWeb,
@@ -27,42 +26,32 @@ func RegisterTools(reg *registry.Registry) {
 			Type: "function",
 			Function: types.FunctionSchema{
 				Name: "web_get",
-				Description: "发送HTTP GET请求获取网页内容或API数据\n\n" +
+				Description: "Send HTTP GET request to fetch web content or API data.\n\n" +
 					"PARAMETERS:\n" +
-					"- url: 目标URL地址（必填）\n" +
-					"- headers: 请求头（可选，键值对）\n" +
-					"- params: 查询参数（可选，键值对）",
+					"- url: Target URL (required)\n" +
+					"- headers: Request headers (optional, key-value pairs)\n" +
+					"- params: Query parameters (optional, key-value pairs)",
 				Parameters: mustJSON(map[string]any{
 					"type": "object",
 					"properties": map[string]any{
-						"url": map[string]any{
-							"type":        "string",
-							"description": "目标URL地址",
-						},
-						"headers": map[string]any{
-							"type":        "object",
-							"description": "请求头（键值对）",
-						},
-						"params": map[string]any{
-							"type":        "object",
-							"description": "查询参数（键值对）",
-						},
+						"url":     map[string]any{"type": "string", "description": "Target URL"},
+						"headers": map[string]any{"type": "object", "description": "Request headers (key-value pairs)"},
+						"params":  map[string]any{"type": "object", "description": "Query parameters (key-value pairs)"},
 					},
 					"required": []string{"url"},
 				}),
 			},
 		},
 		Handler: wrapHandler(func(args map[string]interface{}) (map[string]interface{}, error) {
-				urlStr, _ := args["url"].(string)
-				headers := toStringMap(args["headers"])
-				params := toStringMap(args["params"])
-				return webTool.Get(urlStr, headers, params)
-			}),
+			urlStr, _ := args["url"].(string)
+			headers := toStringMap(args["headers"])
+			params := toStringMap(args["params"])
+			return webTool.Get(urlStr, headers, params)
+		}),
 		ParallelSafe:  true,
 		MaxResultSize: 100000,
 	})
 
-	// web_post
 	reg.Register(&registry.ToolEntry{
 		Name:    "web_post",
 		Toolset: toolsetWeb,
@@ -70,41 +59,31 @@ func RegisterTools(reg *registry.Registry) {
 			Type: "function",
 			Function: types.FunctionSchema{
 				Name: "web_post",
-				Description: "发送HTTP POST请求提交数据\n\n" +
+				Description: "Send HTTP POST request to submit data.\n\n" +
 					"PARAMETERS:\n" +
-					"- url: 目标URL地址（必填）\n" +
-					"- headers: 请求头（可选，键值对）\n" +
-					"- body: 请求体数据（可选，JSON对象）",
+					"- url: Target URL (required)\n" +
+					"- headers: Request headers (optional, key-value pairs)\n" +
+					"- body: Request body (optional, JSON object)",
 				Parameters: mustJSON(map[string]any{
 					"type": "object",
 					"properties": map[string]any{
-						"url": map[string]any{
-							"type":        "string",
-							"description": "目标URL地址",
-						},
-						"headers": map[string]any{
-							"type":        "object",
-							"description": "请求头（键值对）",
-						},
-						"body": map[string]any{
-							"type":        "object",
-							"description": "请求体数据（JSON对象）",
-						},
+						"url":     map[string]any{"type": "string", "description": "Target URL"},
+						"headers": map[string]any{"type": "object", "description": "Request headers (key-value pairs)"},
+						"body":    map[string]any{"type": "object", "description": "Request body (JSON object)"},
 					},
 					"required": []string{"url"},
 				}),
 			},
 		},
 		Handler: wrapHandler(func(args map[string]interface{}) (map[string]interface{}, error) {
-				urlStr, _ := args["url"].(string)
-				headers := toStringMap(args["headers"])
-				return webTool.Post(urlStr, headers, args["body"])
-			}),
+			urlStr, _ := args["url"].(string)
+			headers := toStringMap(args["headers"])
+			return webTool.Post(urlStr, headers, args["body"])
+		}),
 		ParallelSafe:  true,
 		MaxResultSize: 100000,
 	})
 
-	// web_scrape
 	reg.Register(&registry.ToolEntry{
 		Name:    "web_scrape",
 		Toolset: toolsetWeb,
@@ -112,36 +91,29 @@ func RegisterTools(reg *registry.Registry) {
 			Type: "function",
 			Function: types.FunctionSchema{
 				Name: "web_scrape",
-				Description: "抓取网页内容并解析指定选择器的内容\n\n" +
+				Description: "Scrape web page content using a CSS selector.\n\n" +
 					"PARAMETERS:\n" +
-					"- url: 目标URL地址（必填）\n" +
-					"- selector: CSS选择器（必填，如'body'、'.content'）",
+					"- url: Target URL (required)\n" +
+					"- selector: CSS selector (required, e.g. 'body', '.content')",
 				Parameters: mustJSON(map[string]any{
 					"type": "object",
 					"properties": map[string]any{
-						"url": map[string]any{
-							"type":        "string",
-							"description": "目标URL地址",
-						},
-						"selector": map[string]any{
-							"type":        "string",
-							"description": "CSS选择器",
-						},
+						"url":      map[string]any{"type": "string", "description": "Target URL"},
+						"selector": map[string]any{"type": "string", "description": "CSS selector"},
 					},
 					"required": []string{"url", "selector"},
 				}),
 			},
 		},
 		Handler: wrapHandler(func(args map[string]interface{}) (map[string]interface{}, error) {
-				urlStr, _ := args["url"].(string)
-				selector, _ := args["selector"].(string)
-				return webTool.ScrapeWebPage(urlStr, selector)
-			}),
+			urlStr, _ := args["url"].(string)
+			selector, _ := args["selector"].(string)
+			return webTool.ScrapeWebPage(urlStr, selector)
+		}),
 		ParallelSafe:  true,
 		MaxResultSize: 200000,
 	})
 
-	// web_download
 	reg.Register(&registry.ToolEntry{
 		Name:    "web_download",
 		Toolset: toolsetWeb,
@@ -149,72 +121,44 @@ func RegisterTools(reg *registry.Registry) {
 			Type: "function",
 			Function: types.FunctionSchema{
 				Name: "web_download",
-				Description: "下载文件到指定路径\n\n" +
+				Description: "Download a file to the specified path.\n\n" +
 					"PARAMETERS:\n" +
-					"- url: 文件URL地址（必填）\n" +
-					"- save_path: 保存路径（必填）",
+					"- url: File URL (required)\n" +
+					"- save_path: Save path (required)",
 				Parameters: mustJSON(map[string]any{
 					"type": "object",
 					"properties": map[string]any{
-						"url": map[string]any{
-							"type":        "string",
-							"description": "文件URL地址",
-						},
-						"save_path": map[string]any{
-							"type":        "string",
-							"description": "保存路径",
-						},
+						"url":       map[string]any{"type": "string", "description": "File URL"},
+						"save_path": map[string]any{"type": "string", "description": "Save path"},
 					},
 					"required": []string{"url", "save_path"},
 				}),
 			},
 		},
 		Handler: wrapHandler(func(args map[string]interface{}) (map[string]interface{}, error) {
-				urlStr, _ := args["url"].(string)
-				savePath, _ := args["save_path"].(string)
-				return webTool.DownloadFile(urlStr, savePath)
-			}),
-		ParallelSafe:  true,
+			urlStr, _ := args["url"].(string)
+			savePath, _ := args["save_path"].(string)
+			return webTool.DownloadFile(urlStr, savePath)
+		}),
+		ParallelSafe: true,
 	})
-}
-
-type getArgs struct {
-	URL     string                 `json:"url"`
-	Headers map[string]string      `json:"headers,omitempty"`
-	Params  map[string]string      `json:"params,omitempty"`
-}
-
-type postArgs struct {
-	URL     string                 `json:"url"`
-	Headers map[string]string      `json:"headers,omitempty"`
-	Body    map[string]interface{} `json:"body,omitempty"`
-}
-
-type scrapeArgs struct {
-	URL      string `json:"url"`
-	Selector string `json:"selector"`
-}
-
-type downloadArgs struct {
-	URL      string `json:"url"`
-	SavePath string `json:"save_path"`
 }
 
 func wrapHandler(fn func(map[string]interface{}) (map[string]interface{}, error)) registry.Handler {
 	return func(ctx context.Context, raw json.RawMessage) (string, error) {
 		var args map[string]interface{}
 		if err := json.Unmarshal(raw, &args); err != nil {
-			return "无效参数格式: " + err.Error(), nil
+			return "invalid arguments: " + err.Error(), nil
 		}
 
 		result, err := fn(args)
 		if err != nil {
-			return "请求失败: " + err.Error(), nil
+			return "request failed: " + err.Error(), nil
 		}
 
 		jsonResult, err := json.MarshalIndent(result, "", "  ")
 		if err != nil {
-			return "结果序列化失败: " + err.Error(), nil
+			return "result serialization failed: " + err.Error(), nil
 		}
 
 		return string(jsonResult), nil
@@ -235,7 +179,6 @@ func toStringMap(v interface{}) map[string]string {
 	return m
 }
 
-// mustJSON 将 map 序列化为 json.RawMessage
 func mustJSON(v any) json.RawMessage {
 	b, err := json.Marshal(v)
 	if err != nil {
