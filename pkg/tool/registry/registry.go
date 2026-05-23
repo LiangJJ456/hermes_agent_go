@@ -142,6 +142,20 @@ func (r *Registry) ListNames() []string {
 	return out
 }
 
+// RegisterOrReplace 注册工具，如已存在则替换（用于子 agent 需要覆盖 handler 的场景）
+func (r *Registry) RegisterOrReplace(entry *ToolEntry) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	entry.Schema.Type = "function"
+	entry.Schema.Function.Name = entry.Name
+
+	if _, exists := r.tools[entry.Name]; !exists {
+		r.order = append(r.order, entry.Name)
+	}
+	r.tools[entry.Name] = entry
+}
+
 // Count 已注册工具数量
 func (r *Registry) Count() int {
 	r.mu.RLock()
@@ -154,4 +168,9 @@ func (r *Registry) Count() int {
 // Register 向全局注册表注册工具
 func Register(entry *ToolEntry) error {
 	return Global().Register(entry)
+}
+
+// RegisterOrReplace 向全局注册表注册工具（已存在则替换）
+func RegisterOrReplace(entry *ToolEntry) {
+	Global().RegisterOrReplace(entry)
 }

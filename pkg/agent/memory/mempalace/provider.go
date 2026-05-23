@@ -196,6 +196,9 @@ func (p *Provider) Prefetch(_ context.Context, query string, _ string) string {
 // QueuePrefetch reloads from disk asynchronously to catch writes from other sessions.
 func (p *Provider) QueuePrefetch(_, _ string) {
 	go func() {
+		if p.store == nil {
+			return
+		}
 		_ = p.store.LoadAll()
 	}()
 }
@@ -772,10 +775,11 @@ func (p *Provider) buildSessionDiary(messages []map[string]any) string {
 				preview = preview[:200] + "..."
 			}
 			parts = append(parts, fmt.Sprintf("- User: %s", preview))
-			if userMsgCount >= 10 { // Cap diary entries
-				parts = append(parts, fmt.Sprintf("- ... and %d more messages", len(messages)-userMsgCount))
-				break
-			}
+			// todo: cap diary entries to 10 messages
+			// if userMsgCount >= 10 { // Cap diary entries
+			// 	parts = append(parts, fmt.Sprintf("- ... and %d more messages", len(messages)-userMsgCount))
+			// 	break
+			// }
 		}
 	}
 

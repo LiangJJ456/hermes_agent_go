@@ -21,6 +21,8 @@ const (
 	debounceRatio = 0.10
 	// 摘要前缀标记
 	summaryPrefix = "[CONTEXT COMPACTION — REFERENCE ONLY]"
+	// TODO reminder 标记
+	todoReminderTag = "<todo-reminder>"
 )
 
 // Compressor 上下文压缩器
@@ -49,11 +51,12 @@ func (c *Compressor) NeedsCompression(messages []types.Message) bool {
 
 // Compress 执行压缩，返回压缩后的消息列表
 // 算法：
-//   1. 工具输出裁剪（无 LLM 调用）
-//   2. 头部保护（系统提示 + 首次交换）
-//   3. 尾部保护（最新消息）
-//   4. 中间部分用 LLM 生成摘要
-//   5. 防抖检查
+//  1. 工具输出裁剪（无 LLM 调用）
+//  2. 头部保护（系统提示 + 首次交换）
+//  3. 提取并保护最后一条 TODO reminder
+//  4. 尾部保护（最新消息）
+//  5. 中间部分用 LLM 生成摘要
+//  6. 防抖检查
 func (c *Compressor) Compress(ctx context.Context, messages []types.Message) ([]types.Message, error) {
 	if len(messages) <= headProtectCount+2 {
 		return messages, nil // 太短，不压缩
@@ -64,7 +67,10 @@ func (c *Compressor) Compress(ctx context.Context, messages []types.Message) ([]
 	// Step 1: 工具输出裁剪
 	trimmed := c.trimToolOutputs(messages)
 
-	// Step 2: 分割 head / middle / tail
+	// Step 2: 提取最后一条 TODO reminder（从中间部分保护它）
+	lastTodoReminder := c.extractLastTodoReminder(trimmed)
+
+	// Step 3: 分割 head / middle / tail
 	head := trimmed[:headProtectCount]
 	tail := c.protectTail(trimmed[headProtectCount:], tailProtectTokens)
 	middleEnd := len(trimmed) - len(tail)
@@ -74,25 +80,32 @@ func (c *Compressor) Compress(ctx context.Context, messages []types.Message) ([]
 		return trimmed, nil // 没有可压缩的中间部分
 	}
 
-	// Step 3: 用 LLM 生成中间部分摘要
+	// 从 middle 中移除 TODO reminder 消息（它们会被单独保护）
+	middle = c.removeTodoReminders(middle)
+
+	// Step 4: 用 LLM 生成中间部分摘要
 	summary, err := c.summarizeMiddle(ctx, middle)
 	if err != nil {
 		log.Warn("context compression failed, using trimmed messages", "error", err)
 		return trimmed, nil // 降级：仅返回工具输出裁剪后的结果
 	}
 
-	// Step 4: 拼装结果
+	// Step 5: 拼装结果
 	summaryMsg := types.Message{
 		Role:    types.RoleAssistant,
 		Content: fmt.Sprintf("%s\n\n%s", summaryPrefix, summary),
 	}
 
-	result := make([]types.Message, 0, len(head)+1+len(tail))
+	result := make([]types.Message, 0, len(head)+3+len(tail))
 	result = append(result, head...)
 	result = append(result, summaryMsg)
+	// 在摘要之后、tail 之前插入保护的 TODO reminder
+	if lastTodoReminder != nil {
+		result = append(result, *lastTodoReminder)
+	}
 	result = append(result, tail...)
 
-	// Step 5: 防抖
+	// Step 6: 防抖
 	afterTokens := estimateTokens(result)
 	savings := 1.0 - float64(afterTokens)/float64(beforeTokens)
 	if savings < debounceRatio && c.lastSavings < debounceRatio {
@@ -107,9 +120,37 @@ func (c *Compressor) Compress(ctx context.Context, messages []types.Message) ([]
 		"after_tokens", afterTokens,
 		"savings_pct", fmt.Sprintf("%.1f%%", savings*100),
 		"middle_msgs", len(middle),
+		"todo_protected", lastTodoReminder != nil,
 	)
 
 	return result, nil
+}
+
+// extractLastTodoReminder 从消息列表中找到最后一条 TODO reminder
+func (c *Compressor) extractLastTodoReminder(messages []types.Message) *types.Message {
+	for i := len(messages) - 1; i >= 0; i-- {
+		if isTodoReminder(messages[i]) {
+			msg := messages[i]
+			return &msg
+		}
+	}
+	return nil
+}
+
+// removeTodoReminders 从消息列表中移除所有 TODO reminder（压缩时不需要摘要它们）
+func (c *Compressor) removeTodoReminders(messages []types.Message) []types.Message {
+	result := make([]types.Message, 0, len(messages))
+	for _, msg := range messages {
+		if !isTodoReminder(msg) {
+			result = append(result, msg)
+		}
+	}
+	return result
+}
+
+// isTodoReminder 判断消息是否是 TODO reminder
+func isTodoReminder(msg types.Message) bool {
+	return msg.Role == types.RoleSystem && strings.Contains(msg.Content, todoReminderTag)
 }
 
 // trimToolOutputs 将旧的工具结果替换为信息丰富的一行摘要
@@ -146,6 +187,8 @@ func (c *Compressor) trimToolOutputs(messages []types.Message) []types.Message {
 }
 
 // protectTail 从尾部保护指定 Token 预算的消息
+// P3-18: 确保 tool_call_id 链完整性 — 如果 tail 包含 tool result，
+// 则对应的 assistant tool_calls 消息也必须在 tail 中
 func (c *Compressor) protectTail(messages []types.Message, budget int) []types.Message {
 	if len(messages) == 0 {
 		return nil
@@ -161,6 +204,35 @@ func (c *Compressor) protectTail(messages []types.Message, budget int) []types.M
 		tokens += msgTokens
 		startIdx = i
 	}
+
+	// 确保 tool_call chain 完整性：
+	// 如果 tail 的第一条是 tool result，往前找对应的 assistant tool_calls 消息
+	for startIdx > 0 {
+		firstMsg := messages[startIdx]
+		if firstMsg.Role != types.RoleTool || firstMsg.ToolCallID == "" {
+			break
+		}
+		// 往前找包含此 tool_call_id 的 assistant 消息
+		found := false
+		for j := startIdx - 1; j >= 0; j-- {
+			if messages[j].Role == types.RoleAssistant && len(messages[j].ToolCalls) > 0 {
+				for _, tc := range messages[j].ToolCalls {
+					if tc.ID == firstMsg.ToolCallID {
+						startIdx = j
+						found = true
+						break
+					}
+				}
+				if found {
+					break
+				}
+			}
+		}
+		if !found {
+			break
+		}
+	}
+
 	return messages[startIdx:]
 }
 

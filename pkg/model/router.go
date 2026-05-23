@@ -45,6 +45,16 @@ func (r *Router) Resolve(modelSpec string) (Provider, string, error) {
 	return p, modelName, nil
 }
 
+// FirstRegistered 返回第一个注册的 Provider（用于自动选择默认）
+func (r *Router) FirstRegistered() Provider {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	for _, p := range r.providers {
+		return p
+	}
+	return nil
+}
+
 func (r *Router) providerNames() []string {
 	names := make([]string, 0, len(r.providers))
 	for k := range r.providers {

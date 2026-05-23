@@ -13,6 +13,7 @@ import (
 	"code.byted.org/ad_creative/hermes_agent_go/pkg/errx"
 	"code.byted.org/ad_creative/hermes_agent_go/pkg/log"
 	"code.byted.org/ad_creative/hermes_agent_go/pkg/model"
+	"code.byted.org/ad_creative/hermes_agent_go/pkg/tool/builtin"
 	"code.byted.org/ad_creative/hermes_agent_go/pkg/tool/registry"
 	"code.byted.org/ad_creative/hermes_agent_go/pkg/types"
 )
@@ -68,6 +69,9 @@ type AIAgent struct {
 
 	// 事件回调
 	eventCB EventCallback
+
+	// 规划系统
+	todoStore *builtin.TodoStore
 
 	// 子 Agent 控制
 	depth    int  // 当前委托深度
@@ -135,6 +139,16 @@ func (a *AIAgent) SetMemoryManager(mgr *memory.Manager) {
 // MemoryManager 获取记忆管理器
 func (a *AIAgent) MemoryManager() *memory.Manager {
 	return a.memoryMgr
+}
+
+// SetTodoStore 设置 TODO 存储（主 agent 和子 agent 共享同一实例）
+func (a *AIAgent) SetTodoStore(store *builtin.TodoStore) {
+	a.todoStore = store
+}
+
+// TodoStore 获取 TODO 存储
+func (a *AIAgent) TodoStore() *builtin.TodoStore {
+	return a.todoStore
 }
 
 // Run 执行一次完整对话，返回最终 assistant 回复
@@ -276,10 +290,19 @@ func (a *AIAgent) conversationLoop(ctx context.Context) (string, error) {
 		if a.eventCB != nil {
 			// 流式
 			resp, err = provider.ChatStream(ctx, req, func(delta types.StreamDelta) {
-				a.emitEvent(Event{
-					Type:    EventStreamDelta,
-					Content: delta.Content,
-				})
+				if delta.Content != "" {
+					a.emitEvent(Event{
+						Type:    EventStreamDelta,
+						Content: delta.Content,
+					})
+				}
+				if delta.ToolCallStart {
+					a.emitEvent(Event{
+						Type:     EventToolStart,
+						ToolName: delta.ToolCallName,
+						Content:  "streaming tool_call detected",
+					})
+				}
 			})
 		} else {
 			// 同步
@@ -313,6 +336,17 @@ func (a *AIAgent) conversationLoop(ctx context.Context) (string, error) {
 		}
 		a.stats.TotalIterations++
 
+		// Budget 预留提醒：剩余 < 5 时注入警告
+		if remaining := a.budget.Remaining(); remaining > 0 && remaining < 5 {
+			a.mu.Lock()
+			a.messages = append(a.messages, types.Message{
+				Role:    types.RoleSystem,
+				Content: fmt.Sprintf("<budget-warning>IMPORTANT: Only %d iterations remaining. Wrap up your current task immediately. Complete or summarize your work, do NOT start new subtasks.</budget-warning>", remaining),
+			})
+			a.mu.Unlock()
+			a.emitEvent(Event{Type: EventBudgetWarn, Content: fmt.Sprintf("budget low: %d remaining", remaining)})
+		}
+
 		// 执行工具调用（包含记忆工具路由）
 		results := a.executeToolCalls(ctx, assistantMsg.ToolCalls)
 
@@ -327,6 +361,16 @@ func (a *AIAgent) conversationLoop(ctx context.Context) (string, error) {
 				Timestamp:  time.Now(),
 			})
 			a.stats.ToolCalls++
+		}
+
+		// 注入 TODO system reminder（每轮 tool 执行后提醒当前计划状态）
+		if a.todoStore != nil {
+			if todoSummary := a.todoStore.Summary(); todoSummary != "" {
+				a.messages = append(a.messages, types.Message{
+					Role:    types.RoleSystem,
+					Content: "<todo-reminder>\n" + todoSummary + "\nContinue with the next pending task. Mark it in_progress before starting.\n</todo-reminder>",
+				})
+			}
 		}
 		a.mu.Unlock()
 
@@ -524,6 +568,7 @@ func (a *AIAgent) NewChildAgent(task string) (*AIAgent, error) {
 	child := NewAIAgent(childCfg, a.router, a.registry)
 	child.depth = a.depth + 1
 	child.isChild = true
+	child.todoStore = a.todoStore // 子 agent 共享 TODO 状态
 
 	// 子 Agent 继承父 Agent 的事件回调（带前缀）
 	if a.eventCB != nil {

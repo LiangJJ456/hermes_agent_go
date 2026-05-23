@@ -61,10 +61,10 @@ type InitOpts struct {
 	SessionID       string
 	HermesHome      string // 配置根目录
 	Platform        string // "cli", "telegram", etc.
-	AgentContext     string // "primary", "subagent", "cron"
-	AgentIdentity    string // profile name
-	ParentSessionID  string
-	UserID           string
+	AgentContext    string // "primary", "subagent", "cron"
+	AgentIdentity   string // profile name
+	ParentSessionID string
+	UserID          string
 }
 
 // ToolSchemaDef 工具 Schema 定义（轻量版，不直接依赖 types 包）
@@ -77,17 +77,17 @@ type ToolSchemaDef struct {
 // BaseProvider 默认空实现，外部 Provider 可内嵌复用
 type BaseProvider struct{}
 
-func (BaseProvider) SystemPromptBlock() string                              { return "" }
-func (BaseProvider) Prefetch(_ context.Context, _, _ string) string         { return "" }
-func (BaseProvider) QueuePrefetch(_, _ string)                              {}
-func (BaseProvider) SyncTurn(_, _, _ string)                                {}
-func (BaseProvider) GetToolSchemas() []ToolSchemaDef                        { return nil }
+func (BaseProvider) SystemPromptBlock() string                      { return "" }
+func (BaseProvider) Prefetch(_ context.Context, _, _ string) string { return "" }
+func (BaseProvider) QueuePrefetch(_, _ string)                      {}
+func (BaseProvider) SyncTurn(_, _, _ string)                        {}
+func (BaseProvider) GetToolSchemas() []ToolSchemaDef                { return nil }
 func (BaseProvider) HandleToolCall(_ context.Context, _ string, _ map[string]any) (string, error) {
 	return `{"error":"not implemented"}`, nil
 }
-func (BaseProvider) Shutdown()                                         {}
-func (BaseProvider) OnTurnStart(_ int, _ string, _ map[string]any)     {}
-func (BaseProvider) OnSessionEnd(_ []map[string]any)                   {}
-func (BaseProvider) OnPreCompress(_ []map[string]any) string           { return "" }
-func (BaseProvider) OnMemoryWrite(_, _, _ string)                      {}
-func (BaseProvider) OnDelegation(_, _, _ string)                       {}
+func (BaseProvider) Shutdown()                                     {}
+func (BaseProvider) OnTurnStart(_ int, _ string, _ map[string]any) {}
+func (BaseProvider) OnSessionEnd(_ []map[string]any)               {}
+func (BaseProvider) OnPreCompress(_ []map[string]any) string       { return "" }
+func (BaseProvider) OnMemoryWrite(_, _, _ string)                  {}
+func (BaseProvider) OnDelegation(_, _, _ string)                   {}

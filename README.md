@@ -387,6 +387,8 @@ Tools follow a unified interface and are registered in a global registry:
 | Category | Tools | Description |
 |---|---|---|
 | **Builtin** | `bash`, `read_file`, `write_file`, `edit_file`, `list_dir`, `search_files` | Core file system and shell operations |
+| **Web** | `web_get`, `web_post`, `web_scrape`, `web_download` | HTTP requests, web scraping, and file downloads |
+| **Terminal** | `terminal_exec`, `terminal_interactive`, `terminal_info`, `terminal_parse`, `terminal_script` | Terminal command execution and interaction |
 | **Delegate** | `delegate` | Spawn sub-agents for complex sub-tasks |
 | **MCP** | (dynamic) | Tools discovered from MCP servers at runtime |
 | **Memory** | `palace_search`, `palace_add`, `palace_kg_query`, `palace_kg_add`, `palace_kg_invalidate` | MemPalace memory interaction tools |
@@ -418,7 +420,9 @@ All values can be overridden via environment variables or programmatic configura
 
 ## Dependencies
 
-Core dependency: [`chroma-go v0.4.1`](https://github.com/amikos-tech/chroma-go) for ChromaDB vector database integration.
+Core dependencies:
+- [`chroma-go v0.4.1`](https://github.com/amikos-tech/chroma-go) for ChromaDB vector database integration
+- [`goquery v1.12.0`](https://github.com/PuerkitoBio/goquery) for web scraping and HTML parsing
 
 Full dependency list available in `go.mod`.
 

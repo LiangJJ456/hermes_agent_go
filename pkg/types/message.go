@@ -67,4 +67,9 @@ type StreamDelta struct {
 	Content   string     `json:"content,omitempty"`
 	ToolCalls []ToolCall `json:"tool_calls,omitempty"`
 	Reasoning string     `json:"reasoning,omitempty"`
+
+	// tool_call 实时通知（streaming 时发出）
+	ToolCallStart bool   `json:"tool_call_start,omitempty"` // 新 tool_call 开始
+	ToolCallName  string `json:"tool_call_name,omitempty"`  // 工具名称
+	ToolCallID    string `json:"tool_call_id,omitempty"`    // tool_call ID
 }

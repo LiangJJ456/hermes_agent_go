@@ -9,6 +9,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	_ "modernc.org/sqlite" // pure-Go SQLite driver
+
 	"code.byted.org/ad_creative/hermes_agent_go/pkg/errx"
 	"code.byted.org/ad_creative/hermes_agent_go/pkg/log"
 	"code.byted.org/ad_creative/hermes_agent_go/pkg/types"
@@ -49,7 +51,7 @@ type Session struct {
 
 // NewSessionDB 打开/创建数据库
 func NewSessionDB(dbPath string) (*SessionDB, error) {
-	db, err := sql.Open("sqlite3", fmt.Sprintf("file:%s?_journal_mode=WAL&_foreign_keys=on&_busy_timeout=1000", dbPath))
+	db, err := sql.Open("sqlite", fmt.Sprintf("file:%s?_journal_mode=WAL&_foreign_keys=on&_busy_timeout=1000", dbPath))
 	if err != nil {
 		return nil, fmt.Errorf("open db: %w", err)
 	}

@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"code.byted.org/ad_creative/hermes_agent_go/pkg/agent/credential"
 	"code.byted.org/ad_creative/hermes_agent_go/pkg/log"
 	"code.byted.org/ad_creative/hermes_agent_go/pkg/model"
 	"code.byted.org/ad_creative/hermes_agent_go/pkg/types"
@@ -19,36 +20,63 @@ const defaultBaseURL = "https://api.openai.com/v1"
 
 // Provider OpenAI 兼容 Provider
 type Provider struct {
-	apiKey  string
-	baseURL string
-	client  *http.Client
+	name            string
+	apiKey          string
+	baseURL         string
+	client          *http.Client
+	retry           RetryConfig
+	maxContextTokens int
+
+	// 可选：凭据池（设置后优先使用池分配的凭据）
+	credPool *credential.Pool
 }
 
 // New 创建 OpenAI Provider
 func New(apiKey, baseURL string) *Provider {
+	return NewWithName("openai", apiKey, baseURL, 128000)
+}
+
+// NewWithName 创建自定义名称的 OpenAI 兼容 Provider
+func NewWithName(name, apiKey, baseURL string, maxContextTokens int) *Provider {
 	if baseURL == "" {
 		baseURL = defaultBaseURL
 	}
+	if maxContextTokens <= 0 {
+		maxContextTokens = 128000
+	}
 	return &Provider{
-		apiKey:  apiKey,
-		baseURL: strings.TrimRight(baseURL, "/"),
+		name:             name,
+		apiKey:           apiKey,
+		baseURL:          strings.TrimRight(baseURL, "/"),
 		client: &http.Client{
 			Timeout: 5 * time.Minute,
 		},
+		retry:            DefaultRetryConfig(),
+		maxContextTokens: maxContextTokens,
 	}
 }
 
-func (p *Provider) Name() string { return "openai" }
+// SetCredentialPool 设置凭据池（启用多 key 轮转）
+func (p *Provider) SetCredentialPool(pool *credential.Pool) {
+	p.credPool = pool
+}
+
+// SetRetryConfig 设置自定义重试配置
+func (p *Provider) SetRetryConfig(cfg RetryConfig) {
+	p.retry = cfg
+}
+
+func (p *Provider) Name() string { return p.name }
 
 func (p *Provider) SupportsTools() bool { return true }
 
-func (p *Provider) MaxContextTokens() int { return 128000 }
+func (p *Provider) MaxContextTokens() int { return p.maxContextTokens }
 
-// Chat 同步调用
+// Chat 同步调用（带重试）
 func (p *Provider) Chat(ctx context.Context, req *model.ChatRequest) (*types.ChatResponse, error) {
 	body := p.buildRequestBody(req, false)
 
-	respBody, err := p.doRequest(ctx, body)
+	respBody, _, err := p.doRequestWithRetry(ctx, body)
 	if err != nil {
 		return nil, err
 	}
@@ -96,11 +124,11 @@ func (p *Provider) Chat(ctx context.Context, req *model.ChatRequest) (*types.Cha
 	return &types.ChatResponse{Message: msg, Usage: usage}, nil
 }
 
-// ChatStream 流式调用
+// ChatStream 流式调用（带重试）
 func (p *Provider) ChatStream(ctx context.Context, req *model.ChatRequest, cb model.StreamCallback) (*types.ChatResponse, error) {
 	body := p.buildRequestBody(req, true)
 
-	respBody, err := p.doRequest(ctx, body)
+	respBody, _, err := p.doRequestWithRetry(ctx, body)
 	if err != nil {
 		return nil, err
 	}
@@ -112,8 +140,6 @@ func (p *Provider) ChatStream(ctx context.Context, req *model.ChatRequest, cb mo
 	var usage types.Usage
 	toolCallsMap := make(map[int]*types.ToolCall)
 
-	decoder := json.NewDecoder(respBody)
-	buf := make([]byte, 0, 4096)
 	scanner := newSSEScanner(respBody)
 
 	for scanner.Scan() {
@@ -141,7 +167,7 @@ func (p *Provider) ChatStream(ctx context.Context, req *model.ChatRequest, cb mo
 			cb(types.StreamDelta{Content: delta.Content})
 		}
 
-		// 累积 tool_calls
+		// 累积 tool_calls + 实时通知
 		for _, tc := range delta.ToolCalls {
 			existing, ok := toolCallsMap[tc.Index]
 			if !ok {
@@ -151,6 +177,14 @@ func (p *Provider) ChatStream(ctx context.Context, req *model.ChatRequest, cb mo
 				}
 				existing.Function.Name = tc.Function.Name
 				toolCallsMap[tc.Index] = existing
+				// P1-17: 通知用户开始接收 tool_call
+				if tc.Function.Name != "" {
+					cb(types.StreamDelta{
+						ToolCallStart: true,
+						ToolCallName:  tc.Function.Name,
+						ToolCallID:    tc.ID,
+					})
+				}
 			} else {
 				existing.Function.Arguments += tc.Function.Arguments
 			}
@@ -176,8 +210,6 @@ func (p *Provider) ChatStream(ctx context.Context, req *model.ChatRequest, cb mo
 		}
 	}
 
-	_ = buf
-	_ = decoder
 	return &types.ChatResponse{Message: fullMsg, Usage: usage}, nil
 }
 
@@ -224,33 +256,95 @@ func (p *Provider) buildRequestBody(req *model.ChatRequest, stream bool) map[str
 	return body
 }
 
-func (p *Provider) doRequest(ctx context.Context, body map[string]any) (io.ReadCloser, error) {
-	jsonBody, err := json.Marshal(body)
-	if err != nil {
-		return nil, fmt.Errorf("marshal request: %w", err)
+// resolveCredential 获取当前应使用的凭据
+func (p *Provider) resolveCredential() (apiKey, baseURL string, credID string) {
+	// 优先从凭据池获取
+	if p.credPool != nil {
+		cred := p.credPool.Acquire()
+		if cred != nil {
+			return cred.APIKey, cred.BaseURL, cred.ID
+		}
+		// 池中无可用凭据，fallback 到默认
+		log.Warn("credential pool exhausted, using default key")
+	}
+	return p.apiKey, p.baseURL, ""
+}
+
+// doRequestWithRetry 带重试和凭据池感知的请求
+func (p *Provider) doRequestWithRetry(ctx context.Context, body map[string]any) (io.ReadCloser, int, error) {
+	var lastErr error
+
+	for attempt := 0; attempt <= p.retry.MaxRetries; attempt++ {
+		if attempt > 0 {
+			if err := p.retry.Sleep(ctx, attempt-1); err != nil {
+				return nil, 0, err // context cancelled
+			}
+		}
+
+		apiKey, baseURL, credID := p.resolveCredential()
+		if baseURL == "" {
+			baseURL = p.baseURL
+		}
+
+		respBody, statusCode, err := p.doSingleRequest(ctx, body, apiKey, baseURL)
+		if err == nil {
+			return respBody, statusCode, nil
+		}
+
+		lastErr = err
+
+		// 通知凭据池错误
+		if credID != "" && p.credPool != nil && statusCode > 0 {
+			p.credPool.HandleError(credID, statusCode)
+		}
+
+		// 判断是否可重试
+		if statusCode > 0 && p.retry.IsRetryable(statusCode) {
+			log.Warn("API request failed, retrying",
+				"attempt", attempt+1,
+				"max_retries", p.retry.MaxRetries,
+				"status", statusCode,
+				"error", err,
+			)
+			continue
+		}
+
+		// 不可重试的错误，直接返回
+		return nil, statusCode, err
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "POST", p.baseURL+"/chat/completions", bytes.NewReader(jsonBody))
+	return nil, 0, fmt.Errorf("max retries (%d) exceeded: %w", p.retry.MaxRetries, lastErr)
+}
+
+// doSingleRequest 执行单次 HTTP 请求
+func (p *Provider) doSingleRequest(ctx context.Context, body map[string]any, apiKey, baseURL string) (io.ReadCloser, int, error) {
+	jsonBody, err := json.Marshal(body)
 	if err != nil {
-		return nil, fmt.Errorf("create request: %w", err)
+		return nil, 0, fmt.Errorf("marshal request: %w", err)
+	}
+
+	url := strings.TrimRight(baseURL, "/") + "/chat/completions"
+	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(jsonBody))
+	if err != nil {
+		return nil, 0, fmt.Errorf("create request: %w", err)
 	}
 
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+p.apiKey)
+	req.Header.Set("Authorization", "Bearer "+apiKey)
 
 	resp, err := p.client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("http request: %w", err)
+		return nil, 0, fmt.Errorf("http request: %w", err)
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
+		respBytes, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
-		log.Warn("API error", "status", resp.StatusCode, "body", string(body))
-		return nil, fmt.Errorf("API error %d: %s", resp.StatusCode, string(body))
+		log.Warn("API error", "status", resp.StatusCode, "body", string(respBytes))
+		return nil, resp.StatusCode, fmt.Errorf("API error %d: %s", resp.StatusCode, string(respBytes))
 	}
 
-	return resp.Body, nil
+	return resp.Body, resp.StatusCode, nil
 }
 
 // ── API 响应结构 ──
