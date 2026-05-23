@@ -384,13 +384,15 @@ func (a *AIAgent) Run(ctx context.Context, userInput string) (string, bool, erro
 	a.convMem.Messages = messagesToOrchMessages(a.messages)
 	a.mu.Unlock()
 
-	// Set system prompt on the LLM node
+	// Set system prompt on the LLM node (protected by mu for concurrent safety)
+	a.mu.Lock()
 	if llmNode, ok := a.graph.Nodes["llm"]; ok {
 		if llmCfg, ok := llmNode.ParsedConfig.(*orchrunner.LLMConfig); ok {
 			sysPrompt := a.promptBuilder.Build().Content
 			llmCfg.SystemPrompt = sysPrompt
 		}
 	}
+	a.mu.Unlock()
 
 	// Execute the graph
 	output, snap, err := a.executor.Execute(ctx, a.graph, userInput)
@@ -548,10 +550,13 @@ func (a *AIAgent) NewChildAgent(task string) (*AIAgent, error) {
 	child.skillMgr = a.skillMgr   // 共享发现后端；激活集合各自独立（activeSkills 默认空）
 
 	// 子 Agent 继承父 Agent 的事件回调（带前缀）
+	// 使用 mu 保护回调，防止多个并发子 Agent 同时调用 eventCB 导致 race
 	if a.eventCB != nil {
 		child.SetEventCallback(func(e Event) {
 			e.Content = fmt.Sprintf("[child-agent] %s", e.Content)
+			a.mu.Lock()
 			a.eventCB(e)
+			a.mu.Unlock()
 		})
 	}
 
