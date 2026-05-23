@@ -441,9 +441,47 @@ func (a *AIAgent) Shutdown() {
 	}
 }
 
-// SetCompressor 设置上下文压缩器
+// SetCompressor sets the context compressor and wires it into adapters.
 func (a *AIAgent) SetCompressor(c *agentctx.Compressor) {
 	a.compressor = c
+	if c != nil {
+		a.llmInvoker.Compressor = (*compressorBridge)(c)
+		a.toolInvoker.Compressor = (*compressorBridge)(c)
+		a.toolInvoker.CompressFn = func(ctx context.Context) error {
+			a.mu.Lock()
+			msgs := make([]types.Message, len(a.messages))
+			copy(msgs, a.messages)
+			a.mu.Unlock()
+
+			compressed, err := c.Compress(ctx, msgs)
+			if err != nil {
+				return err
+			}
+
+			a.mu.Lock()
+			a.messages = compressed
+			a.convMem.Messages = messagesToOrchMessages(compressed)
+			a.mu.Unlock()
+			return nil
+		}
+	}
+}
+
+// compressorBridge adapts *agentctx.Compressor to adapters.CompressorInterface.
+type compressorBridge agentctx.Compressor
+
+func (b *compressorBridge) NeedsCompression(msgs interface{}) bool {
+	if typed, ok := msgs.([]types.Message); ok {
+		return (*agentctx.Compressor)(b).NeedsCompression(typed)
+	}
+	return false
+}
+
+func (b *compressorBridge) Compress(ctx context.Context, msgs interface{}) (interface{}, error) {
+	if typed, ok := msgs.([]types.Message); ok {
+		return (*agentctx.Compressor)(b).Compress(ctx, typed)
+	}
+	return msgs, nil
 }
 
 // GetMessages 获取当前对话历史（只读副本）

@@ -20,7 +20,8 @@ const defaultGraphJSON = `{
       "Type": "choice",
       "Config": {
         "Choices": [
-          {"Condition": {"has_tool_calls": true}, "Next": "dispatch_tools"}
+          {"Condition": {"has_tool_calls": true}, "Next": "dispatch_tools"},
+          {"Condition": {"needs_compression": true}, "Next": "compress"}
         ],
         "Default": "end"
       }
@@ -28,6 +29,10 @@ const defaultGraphJSON = `{
     "dispatch_tools": {
       "Type": "parallel",
       "Config": {"Branches": "$dynamic_tool_branches"}
+    },
+    "compress": {
+      "Type": "tool",
+      "Config": {"Resource": "builtin/compress_context"}
     },
     "wait_and_retry": {
       "Type": "tool",
@@ -38,6 +43,7 @@ const defaultGraphJSON = `{
   "Edges": [
     {"From": "llm", "To": "route", "Priority": 0},
     {"From": "dispatch_tools", "To": "llm", "Priority": 0},
+    {"From": "compress", "To": "llm", "Priority": 0},
     {"From": "wait_and_retry", "To": "llm", "Priority": 0}
   ]
 }`

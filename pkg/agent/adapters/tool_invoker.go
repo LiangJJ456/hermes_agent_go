@@ -11,10 +11,21 @@ import (
 	"code.byted.org/ad_creative/hermes_agent_go/pkg/tool/registry"
 )
 
+// CompressorInterface is a minimal interface for context compression.
+type CompressorInterface interface {
+	NeedsCompression(messages interface{}) bool
+	Compress(ctx context.Context, messages interface{}) (interface{}, error)
+}
+
+// CompressFunc is called to compress conversation context in-place.
+type CompressFunc func(ctx context.Context) error
+
 // RegistryAdapter adapts hermes tool.Registry to runner.ToolInvoker.
 type RegistryAdapter struct {
-	Registry  *registry.Registry
-	MemoryMgr *memory.Manager
+	Registry   *registry.Registry
+	MemoryMgr  *memory.Manager
+	Compressor CompressorInterface
+	CompressFn CompressFunc
 }
 
 func (a *RegistryAdapter) Invoke(ctx context.Context, resource string,
@@ -26,6 +37,22 @@ func (a *RegistryAdapter) Invoke(ctx context.Context, resource string,
 			Status:    orchestrator.StatusPending,
 			Interrupt: true,
 			Output:    input,
+		}, nil
+	}
+
+	// Compress context tool
+	if resource == "builtin/compress_context" {
+		if a.CompressFn != nil {
+			if err := a.CompressFn(ctx); err != nil {
+				return &orchestrator.NodeResult{
+					Status: orchestrator.StatusContinue,
+					Output: fmt.Sprintf("compression failed: %v", err),
+				}, nil
+			}
+		}
+		return &orchestrator.NodeResult{
+			Status: orchestrator.StatusContinue,
+			Output: "context compressed",
 		}, nil
 	}
 

@@ -14,10 +14,11 @@ import (
 
 // RouterAdapter adapts hermes model.Router to runner.LLMInvoker.
 type RouterAdapter struct {
-	Router    *model.Router
-	Registry  *registry.Registry
-	Config    types.AgentConfig
-	MemoryMgr *memory.Manager
+	Router     *model.Router
+	Registry   *registry.Registry
+	Config     types.AgentConfig
+	MemoryMgr  *memory.Manager
+	Compressor CompressorInterface
 }
 
 func (a *RouterAdapter) Chat(ctx context.Context, modelName string,
@@ -101,10 +102,15 @@ func (a *RouterAdapter) call(ctx context.Context, modelName string,
 	}
 
 	hasToolCalls := len(resp.Message.ToolCalls) > 0
+	needsCompression := false
+	if a.Compressor != nil {
+		needsCompression = a.Compressor.NeedsCompression(chatMsgs)
+	}
 	output := map[string]interface{}{
-		"content":        resp.Message.Content,
-		"has_tool_calls": hasToolCalls,
-		"finish_reason":  string(resp.Message.FinishReason),
+		"content":           resp.Message.Content,
+		"has_tool_calls":    hasToolCalls,
+		"needs_compression": needsCompression,
+		"finish_reason":     string(resp.Message.FinishReason),
 	}
 
 	// Convert tool calls for the orchestrator
