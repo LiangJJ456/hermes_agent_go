@@ -25,3 +25,10 @@ type NodeResult struct {
 	Cause     string
 	Interrupt bool // true means pause and wait for external input
 }
+
+// ExecutionSnapshot captures execution state at a point in time.
+// Full definition is in pkg/orchestrator/executor.
+type ExecutionSnapshot struct {
+	NodeID string
+	Status string
+}

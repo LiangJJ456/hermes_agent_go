@@ -91,6 +91,24 @@ func TestToolRunnerNoInvoker(t *testing.T) {
 	}
 }
 
+type mockGraphExecutor struct{}
+
+func (m *mockGraphExecutor) Execute(ctx context.Context, g *orchestrator.Graph,
+	input interface{}) (interface{}, *orchestrator.ExecutionSnapshot, error) {
+	return nil, nil, nil
+}
+
+func TestParallelRunnerNoExecutor(t *testing.T) {
+	r := &ParallelRunner{}
+	node := &orchestrator.NodeSpec{
+		Config: json.RawMessage(`{"Branches":[]}`),
+	}
+	_, err := r.Run(context.Background(), node, nil, nil)
+	if err == nil {
+		t.Fatal("expected error for missing executor")
+	}
+}
+
 func TestToolRunnerWithMockInvoker(t *testing.T) {
 	r := &ToolRunner{}
 	r.SetInvoker(&mockToolInvoker{})
