@@ -9,12 +9,19 @@ type NodeRunner interface {
 		execCtx interface{}) (*NodeResult, error)
 }
 
+// Status constants for NodeResult.
+const (
+	StatusContinue = "continue"
+	StatusEnd      = "end"
+	StatusPending  = "pending"
+)
+
 // NodeResult is the output of a node execution.
 type NodeResult struct {
-	Status    string      // "continue" | "end" | "pending"
+	Status    string // use StatusContinue / StatusEnd / StatusPending
 	Output    interface{}
-	Next      string      // dynamic next node (optional, for choice nodes)
+	Next      string // dynamic next node (optional, for choice nodes)
 	Error     string
 	Cause     string
-	Interrupt bool        // true means pause and wait for external input
+	Interrupt bool // true means pause and wait for external input
 }
