@@ -72,3 +72,39 @@ func TestChoiceRunnerNoMatch(t *testing.T) {
 		t.Fatalf("expected default next 'end', got %q", result.Next)
 	}
 }
+
+type mockToolInvoker struct{}
+
+func (m *mockToolInvoker) Invoke(ctx context.Context, resource string,
+	input interface{}, timeout uint) (*orchestrator.NodeResult, error) {
+	return &orchestrator.NodeResult{Status: orchestrator.StatusContinue, Output: "result"}, nil
+}
+
+func TestToolRunnerNoInvoker(t *testing.T) {
+	r := &ToolRunner{}
+	node := &orchestrator.NodeSpec{
+		Config: json.RawMessage(`{"Resource":"rpc/test"}`),
+	}
+	_, err := r.Run(context.Background(), node, "input", nil)
+	if err == nil {
+		t.Fatal("expected error for missing invoker")
+	}
+}
+
+func TestToolRunnerWithMockInvoker(t *testing.T) {
+	r := &ToolRunner{}
+	r.SetInvoker(&mockToolInvoker{})
+	node := &orchestrator.NodeSpec{
+		Config: json.RawMessage(`{"Resource":"rpc/test","Timeout":10}`),
+	}
+	result, err := r.Run(context.Background(), node, "input", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != orchestrator.StatusContinue {
+		t.Fatalf("expected status 'continue', got %q", result.Status)
+	}
+	if result.Output != "result" {
+		t.Fatalf("expected output 'result', got %v", result.Output)
+	}
+}
