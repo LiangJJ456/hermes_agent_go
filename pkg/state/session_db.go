@@ -1,6 +1,7 @@
 package state
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -374,3 +375,52 @@ func containsImpl(s, sub string) bool {
 	}
 	return false
 }
+
+// ── Execution Snapshots ──
+
+// SaveSnapshot stores an execution snapshot for a session.
+func (s *SessionDB) SaveSnapshot(sessionID string, data []byte) error {
+	return s.executeWrite(func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(context.Background(),
+			`INSERT OR REPLACE INTO snapshots (session_id, graph_hash, snapshot, created_at)
+			 VALUES (?, '', ?, ?)`,
+			sessionID, data, time.Now().Unix())
+		return err
+	})
+}
+
+// LoadSnapshot loads the last saved snapshot for a session.
+func (s *SessionDB) LoadSnapshot(sessionID string) ([]byte, error) {
+	var data []byte
+	err := s.executeRead(func(tx *sql.Tx) error {
+		row := tx.QueryRowContext(context.Background(),
+			`SELECT snapshot FROM snapshots WHERE session_id = ?`, sessionID)
+		return row.Scan(&data)
+	})
+	if err != nil {
+		return nil, err
+	}
+	return data, nil
+}
+
+// DeleteSnapshot removes a snapshot for a session.
+func (s *SessionDB) DeleteSnapshot(sessionID string) error {
+	return s.executeWrite(func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(context.Background(),
+			`DELETE FROM snapshots WHERE session_id = ?`, sessionID)
+		return err
+	})
+}
+
+func (s *SessionDB) executeRead(fn func(tx *sql.Tx) error) error {
+	tx, err := s.db.BeginTx(context.Background(), &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return fmt.Errorf("begin read tx: %w", err)
+	}
+	defer tx.Rollback()
+	if err := fn(tx); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
