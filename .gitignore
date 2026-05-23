@@ -16,3 +16,6 @@ Thumbs.db
 
 # Palace runtime data (user-specific)
 palace/
+
+# Superpowers brainstorming artifacts
+.superpowers/
