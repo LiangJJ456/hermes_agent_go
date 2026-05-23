@@ -353,20 +353,17 @@ func (a *AIAgent) Run(ctx context.Context, userInput string) (string, bool, erro
 	a.turnNum++
 	a.mu.Unlock()
 
-	// PRE: memory prefetch — called ONCE with real user input (BUG FIX)
+	// PRE: memory prefetch — recall relevant memories and update system prompt
 	if a.memoryMgr != nil {
 		a.memoryMgr.OnTurnStart(a.turnNum, userInput, nil)
 		memCtx := a.memoryMgr.PrefetchAll(ctx, userInput, a.config.SessionID)
 		if memCtx != "" {
 			a.emitEvent(Event{Type: EventMemory, Content: "memory context recalled"})
-			// Inject into conversation memory as a system message before the user message
-			contextBlock := memory.BuildContextBlock(memCtx)
-			if contextBlock != "" {
-				a.convMem.AddMessage(orchcontext.Message{
-					Role:    "system",
-					Content: contextBlock,
-				})
-			}
+			// Update system prompt with recalled memory (replaces previous memory context)
+			a.promptBuilder.SetMemoryContext(memCtx)
+			a.mu.Lock()
+			a.messages[0] = a.promptBuilder.Build()
+			a.mu.Unlock()
 		}
 	}
 
