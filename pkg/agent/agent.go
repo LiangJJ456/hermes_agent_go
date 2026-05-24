@@ -392,6 +392,7 @@ func (a *AIAgent) conversationLoop(ctx context.Context) (string, error) {
 					break
 				}
 			}
+			// messages[0] 恒为 system prompt,故用户消息下标必 > 0;== 0 不会发生,跳过即可
 			if lastUserIdx > 0 {
 				injected := make([]types.Message, 0, len(msgs)+1)
 				injected = append(injected, msgs[:lastUserIdx]...)
