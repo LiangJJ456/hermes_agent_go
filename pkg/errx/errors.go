@@ -1,6 +1,22 @@
 package errx
 
-import "errors"
+import (
+	"errors"
+	"fmt"
+)
+
+// Wrap 包装错误并附加消息
+func Wrap(err error, msg string) error {
+	if err == nil {
+		return nil
+	}
+	return fmt.Errorf("%s: %w", msg, err)
+}
+
+// New 创建新错误
+func New(msg string) error {
+	return errors.New(msg)
+}
 
 var (
 	// Agent 引擎错误

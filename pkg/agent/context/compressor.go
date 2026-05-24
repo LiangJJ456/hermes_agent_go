@@ -167,11 +167,8 @@ func (c *Compressor) trimToolOutputs(messages []types.Message) []types.Message {
 			summary := fmt.Sprintf("[%s] output: %d chars, %d lines",
 				toolName, len(msg.Content), lines)
 
-			// 保留首 200 字符作为上下文
-			preview := msg.Content
-			if len(preview) > 200 {
-				preview = preview[:200] + "..."
-			}
+			// 保留首 200 字符作为上下文（rune 安全，避免切断多字节字符）
+			preview := truncate(msg.Content, 200)
 
 			result[i] = types.Message{
 				Role:       types.RoleTool,
@@ -271,7 +268,7 @@ Format: bullet points grouped by topic.`,
 
 // ── 辅助函数 ──
 
-// estimateTokens 粗略估算 Token 数（4 chars ≈ 1 token）
+// estimateTokens 粗略估算消息列表的 Token 数。
 func estimateTokens(messages []types.Message) int {
 	total := 0
 	for _, m := range messages {
@@ -281,16 +278,41 @@ func estimateTokens(messages []types.Message) int {
 }
 
 func estimateMessageTokens(m types.Message) int {
-	chars := len(m.Content) + len(m.Reasoning)
+	tokens := estimateTextTokens(m.Content) + estimateTextTokens(m.Reasoning)
 	for _, tc := range m.ToolCalls {
-		chars += len(tc.Function.Arguments) + len(tc.Function.Name)
+		tokens += estimateTextTokens(tc.Function.Arguments) + estimateTextTokens(tc.Function.Name)
 	}
-	return chars/4 + 4 // +4 for role/name overhead
+	return tokens + 4 // +4 for role/name overhead
 }
 
-func truncate(s string, maxLen int) string {
-	if len(s) <= maxLen {
-		return s
+// estimateTextTokens 按字符脚本估算 Token 数。
+// 注意：必须按 rune 计数而非字节——len() 对 UTF-8 多字节字符（如中文，3 字节/字）
+// 会把汉字算成 ~0.75 token，而实际约 1-2 token，导致严重低估、压缩触发过晚。
+// 启发式：ASCII 约 4 字符/token；非 ASCII（主要是 CJK）约 1 token/字（略偏保守）。
+func estimateTextTokens(s string) int {
+	ascii, other := 0, 0
+	for _, r := range s {
+		if r <= 0x7F {
+			ascii++
+		} else {
+			other++
+		}
 	}
-	return s[:maxLen] + "..."
+	return ascii/4 + other
+}
+
+// truncate 截断到最多 maxRunes 个字符（按 rune 计），超出则追加 "..."。
+// 按 rune 边界切，避免把多字节字符（如中文）从中间切断产生非法 UTF-8。
+func truncate(s string, maxRunes int) string {
+	if maxRunes < 0 {
+		maxRunes = 0
+	}
+	count := 0
+	for i := range s { // range 在每个 rune 起始字节处给出索引 i
+		if count == maxRunes {
+			return s[:i] + "..."
+		}
+		count++
+	}
+	return s // rune 总数 <= maxRunes，无需截断
 }

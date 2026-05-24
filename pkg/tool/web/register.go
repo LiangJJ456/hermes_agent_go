@@ -3,6 +3,7 @@ package web
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 
 	"code.byted.org/ad_creative/hermes_agent_go/pkg/tool/registry"
 	"code.byted.org/ad_creative/hermes_agent_go/pkg/types"
@@ -51,7 +52,12 @@ func RegisterTools(reg *registry.Registry) {
 				}),
 			},
 		},
-		Handler:       wrapHandler(webTool.Get),
+		Handler: wrapHandler(func(args map[string]interface{}) (map[string]interface{}, error) {
+				urlStr, _ := args["url"].(string)
+				headers := toStringMap(args["headers"])
+				params := toStringMap(args["params"])
+				return webTool.Get(urlStr, headers, params)
+			}),
 		ParallelSafe:  true,
 		MaxResultSize: 100000,
 	})
@@ -89,7 +95,11 @@ func RegisterTools(reg *registry.Registry) {
 				}),
 			},
 		},
-		Handler:       wrapHandler(webTool.Post),
+		Handler: wrapHandler(func(args map[string]interface{}) (map[string]interface{}, error) {
+				urlStr, _ := args["url"].(string)
+				headers := toStringMap(args["headers"])
+				return webTool.Post(urlStr, headers, args["body"])
+			}),
 		ParallelSafe:  true,
 		MaxResultSize: 100000,
 	})
@@ -122,7 +132,11 @@ func RegisterTools(reg *registry.Registry) {
 				}),
 			},
 		},
-		Handler:       wrapHandler(webTool.ScrapeWebPage),
+		Handler: wrapHandler(func(args map[string]interface{}) (map[string]interface{}, error) {
+				urlStr, _ := args["url"].(string)
+				selector, _ := args["selector"].(string)
+				return webTool.ScrapeWebPage(urlStr, selector)
+			}),
 		ParallelSafe:  true,
 		MaxResultSize: 200000,
 	})
@@ -155,7 +169,11 @@ func RegisterTools(reg *registry.Registry) {
 				}),
 			},
 		},
-		Handler:       wrapHandler(webTool.DownloadFile),
+		Handler: wrapHandler(func(args map[string]interface{}) (map[string]interface{}, error) {
+				urlStr, _ := args["url"].(string)
+				savePath, _ := args["save_path"].(string)
+				return webTool.DownloadFile(urlStr, savePath)
+			}),
 		ParallelSafe:  true,
 	})
 }
@@ -182,22 +200,14 @@ type downloadArgs struct {
 	SavePath string `json:"save_path"`
 }
 
-func wrapHandler(fn func(string, map[string]string, interface{}) (map[string]interface{}, error)) registry.Handler {
+func wrapHandler(fn func(map[string]interface{}) (map[string]interface{}, error)) registry.Handler {
 	return func(ctx context.Context, raw json.RawMessage) (string, error) {
 		var args map[string]interface{}
 		if err := json.Unmarshal(raw, &args); err != nil {
 			return "无效参数格式: " + err.Error(), nil
 		}
 
-		url, ok := args["url"].(string)
-		if !ok {
-			return "参数url必填且必须为字符串", nil
-		}
-
-		headers, _ := args["headers"].(map[string]string)
-		body := args["body"]
-
-		result, err := fn(url, headers, body)
+		result, err := fn(args)
 		if err != nil {
 			return "请求失败: " + err.Error(), nil
 		}
@@ -209,6 +219,20 @@ func wrapHandler(fn func(string, map[string]string, interface{}) (map[string]int
 
 		return string(jsonResult), nil
 	}
+}
+
+func toStringMap(v interface{}) map[string]string {
+	raw, ok := v.(map[string]interface{})
+	if !ok {
+		return nil
+	}
+	m := make(map[string]string, len(raw))
+	for k, val := range raw {
+		if s, ok := val.(string); ok {
+			m[k] = s
+		}
+	}
+	return m
 }
 
 // mustJSON 将 map 序列化为 json.RawMessage

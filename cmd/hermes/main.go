@@ -2,6 +2,8 @@ package main
 
 import (
 	_ "code.byted.org/ad_creative/hermes_agent_go/pkg/tool/builtin"
+	_ "code.byted.org/ad_creative/hermes_agent_go/pkg/tool/terminal"
+	_ "code.byted.org/ad_creative/hermes_agent_go/pkg/tool/web"
 
 	"bufio"
 	"context"
@@ -16,12 +18,13 @@ import (
 	"time"
 
 	"code.byted.org/ad_creative/hermes_agent_go/pkg/agent"
-	"code.byted.org/ad_creative/hermes_agent_go/pkg/agent/credential"
 	agentctx "code.byted.org/ad_creative/hermes_agent_go/pkg/agent/context"
+	"code.byted.org/ad_creative/hermes_agent_go/pkg/agent/credential"
 	"code.byted.org/ad_creative/hermes_agent_go/pkg/agent/memory"
 	"code.byted.org/ad_creative/hermes_agent_go/pkg/agent/memory/mempalace"
 	hlog "code.byted.org/ad_creative/hermes_agent_go/pkg/log"
 	"code.byted.org/ad_creative/hermes_agent_go/pkg/model"
+	"code.byted.org/ad_creative/hermes_agent_go/pkg/model/deepseek"
 	"code.byted.org/ad_creative/hermes_agent_go/pkg/model/openai"
 	"code.byted.org/ad_creative/hermes_agent_go/pkg/state"
 	"code.byted.org/ad_creative/hermes_agent_go/pkg/tool/builtin"
@@ -59,9 +62,19 @@ func main() {
 	// 初始化模型路由
 	router := model.NewRouter()
 	var mainProvider model.Provider
-	if apiKey != "" {
-		mainProvider = openai.New(apiKey, baseURL)
-		router.Register(mainProvider)
+
+	// 根据配置中的 model 解析 provider 并创建对应的 Provider
+	if modelName != "" {
+		providerName, _, _ := strings.Cut(modelName, "/")
+		if apiKey != "" {
+			switch providerName {
+			case "deepseek":
+				mainProvider = deepseek.New(apiKey, baseURL)
+			default:
+				mainProvider = openai.New(apiKey, baseURL)
+			}
+			router.Register(mainProvider)
+		}
 	}
 
 	// 注册自定义 Provider（从配置文件 custom_providers 加载）
@@ -81,22 +94,22 @@ func main() {
 		fmt.Fprintf(os.Stderr, "Custom provider registered: %s (%s)\n", cp.Name, cp.BaseURL)
 	}
 
-		// 如果当前 Model 指向的 provider 未注册但已有其他 provider 可用，自动切换
-		if _, _, err := router.Resolve(cfg.Model); err != nil {
-			if first := router.FirstRegistered(); first != nil {
-				oldModel := cfg.Model
-				for _, cp := range cfg.CustomProviders {
-					if cp.Name == first.Name() && cp.Model != "" {
-						cfg.Model = cp.Name + "/" + cp.Model
-						break
-					}
+	// 如果当前 Model 指向的 provider 未注册但已有其他 provider 可用，自动切换
+	if _, _, err := router.Resolve(cfg.Model); err != nil {
+		if first := router.FirstRegistered(); first != nil {
+			oldModel := cfg.Model
+			for _, cp := range cfg.CustomProviders {
+				if cp.Name == first.Name() && cp.Model != "" {
+					cfg.Model = cp.Name + "/" + cp.Model
+					break
 				}
-				if cfg.Model == oldModel {
-					cfg.Model = first.Name() + "/" + oldModel
-				}
-				fmt.Fprintf(os.Stderr, "Model %q unavailable, auto-switched to %q\n", oldModel, cfg.Model)
 			}
+			if cfg.Model == oldModel {
+				cfg.Model = first.Name() + "/" + oldModel
+			}
+			fmt.Fprintf(os.Stderr, "Model %q unavailable, auto-switched to %q\n", oldModel, cfg.Model)
 		}
+	}
 
 	// 初始化凭据池（支持多 key 轮转）
 	var credPool *credential.Pool
@@ -118,7 +131,12 @@ func main() {
 			}
 		}
 		if mainProvider != nil {
-			mainProvider.(*openai.Provider).SetCredentialPool(credPool)
+			switch p := mainProvider.(type) {
+			case *openai.Provider:
+				p.SetCredentialPool(credPool)
+			case *deepseek.Provider:
+				p.SetCredentialPool(credPool)
+			}
 		}
 		fmt.Fprintf(os.Stderr, "🔑 Credential pool: %d key(s)\n", credPool.AvailableCount())
 	}
@@ -171,6 +189,12 @@ func main() {
 		})
 	}
 
+	// ── 初始化 Skill 系统 ──
+	skillsDir := filepath.Join(hermesHome, "skills")
+	_ = os.MkdirAll(skillsDir, 0o755)
+	skillMgr := builtin.NewSkillManager([]string{skillsDir})
+	skillMgr.RegisterTool()
+	ag.SetSkillManager(skillMgr)
 	// ── 初始化上下文压缩器 ──
 	if mainProvider != nil {
 		compressor := agentctx.NewCompressor(mainProvider, modelName, mainProvider.MaxContextTokens())

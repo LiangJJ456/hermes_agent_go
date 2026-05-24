@@ -2,7 +2,6 @@ package web
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -13,8 +12,6 @@ import (
 
 	"github.com/PuerkitoBio/goquery"
 	"code.byted.org/ad_creative/hermes_agent_go/pkg/errx"
-	"code.byted.org/ad_creative/hermes_agent_go/pkg/tool/registry"
-	"code.byted.org/ad_creative/hermes_agent_go/pkg/types"
 )
 
 // WebTool 提供Web相关功能
