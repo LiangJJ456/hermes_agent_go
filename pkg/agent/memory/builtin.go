@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
-	"sync"
 
 	"code.byted.org/ad_creative/hermes_agent_go/pkg/log"
 )
@@ -14,10 +13,6 @@ import (
 // 基于 MEMORY.md + USER.md 文件存储
 type BuiltinProvider struct {
 	store *Store
-
-	mu            sync.Mutex
-	prefetchCache string // 缓存的预取内容
-	prefetchReady bool   // 是否有待消费的预取结果
 }
 
 // NewBuiltinProvider 创建内建 Provider
@@ -61,33 +56,13 @@ func (p *BuiltinProvider) SystemPromptBlock() string {
 	return result
 }
 
-// Prefetch 返回缓存的预取内容，若无缓存则从当前 store 状态构建
+// Prefetch — builtin 记忆不参与每轮预取,仅经 SystemPromptBlock 注入 system prompt。
 func (p *BuiltinProvider) Prefetch(_ context.Context, _ string, _ string) string {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-
-	if p.prefetchReady {
-		content := p.prefetchCache
-		p.prefetchReady = false
-		p.prefetchCache = ""
-		return content
-	}
-
-	// 无缓存，从当前磁盘状态构建
-	return p.buildPrefetchContent()
+	return ""
 }
 
-// QueuePrefetch 异步预取：从磁盘重新加载并缓存结果供下次 Prefetch 消费
-func (p *BuiltinProvider) QueuePrefetch(_ string, _ string) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-
-	// 从磁盘重新加载最新状态（捕获其他会话的写入）
-	_ = p.store.LoadFromDisk()
-
-	p.prefetchCache = p.buildPrefetchContent()
-	p.prefetchReady = p.prefetchCache != ""
-}
+// QueuePrefetch — builtin 已退出预取,no-op。
+func (p *BuiltinProvider) QueuePrefetch(_ string, _ string) {}
 
 // SyncTurn 每轮结束后持久化 —— 内建 Provider 的写入在 tool call 时已实时落盘，
 // 因此此处为 no-op
@@ -261,26 +236,6 @@ func (p *BuiltinProvider) Shutdown() {
 }
 
 // ── 内部辅助 ──
-
-// buildPrefetchContent 从当前 store 状态构建预取内容
-func (p *BuiltinProvider) buildPrefetchContent() string {
-	var parts []string
-
-	memEntries := p.store.Read("memory")
-	if memEntries.Success && len(memEntries.Entries) > 0 {
-		parts = append(parts, strings.Join(memEntries.Entries, EntryDelimiter))
-	}
-
-	userEntries := p.store.Read("user")
-	if userEntries.Success && len(userEntries.Entries) > 0 {
-		parts = append(parts, strings.Join(userEntries.Entries, EntryDelimiter))
-	}
-
-	if len(parts) == 0 {
-		return ""
-	}
-	return strings.Join(parts, "\n\n")
-}
 
 func errJSON(format string, args ...any) string {
 	msg := fmt.Sprintf(format, args...)
