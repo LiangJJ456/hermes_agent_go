@@ -3,6 +3,7 @@ package terminal
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 
 	"code.byted.org/ad_creative/hermes_agent_go/pkg/tool/registry"
 	"code.byted.org/ad_creative/hermes_agent_go/pkg/types"
@@ -47,7 +48,18 @@ func RegisterTools(reg *registry.Registry) {
 				}),
 			},
 		},
-		Handler:       wrapHandler(terminalTool.ExecuteCommand),
+		Handler: wrapHandler(func(args map[string]interface{}) (map[string]interface{}, error) {
+				command, _ := args["command"].(string)
+				var cmdArgs []string
+				if argsVal, ok := args["args"].([]interface{}); ok {
+					for _, a := range argsVal {
+						if s, ok := a.(string); ok {
+							cmdArgs = append(cmdArgs, s)
+						}
+					}
+				}
+				return terminalTool.ExecuteCommand(command, cmdArgs...)
+			}),
 		ParallelSafe:  false,
 		MaxResultSize: 100000,
 	})
@@ -74,7 +86,13 @@ func RegisterTools(reg *registry.Registry) {
 				}),
 			},
 		},
-		Handler:       wrapHandler(terminalTool.InteractiveSession),
+		Handler: wrapHandler(func(args map[string]interface{}) (map[string]interface{}, error) {
+				prompt, _ := args["prompt"].(string)
+				if prompt == "" {
+					prompt = "> "
+				}
+				return terminalTool.InteractiveSession(prompt)
+			}),
 		ParallelSafe:  false,
 		NeverParallel: true,
 	})
@@ -94,7 +112,9 @@ func RegisterTools(reg *registry.Registry) {
 				}),
 			},
 		},
-		Handler:       wrapHandler(terminalTool.GetTerminalInfo),
+		Handler: wrapHandler(func(_ map[string]interface{}) (map[string]interface{}, error) {
+				return terminalTool.GetTerminalInfo()
+			}),
 		ParallelSafe:  true,
 	})
 
@@ -127,7 +147,11 @@ func RegisterTools(reg *registry.Registry) {
 				}),
 			},
 		},
-		Handler:       wrapHandler(terminalTool.ParseCommandOutput),
+		Handler: wrapHandler(func(args map[string]interface{}) (map[string]interface{}, error) {
+				output, _ := args["output"].(string)
+				parser, _ := args["parser"].(string)
+				return terminalTool.ParseCommandOutput(output, parser)
+			}),
 		ParallelSafe:  true,
 	})
 
@@ -160,7 +184,18 @@ func RegisterTools(reg *registry.Registry) {
 				}),
 			},
 		},
-		Handler:       wrapHandler(terminalTool.RunScript),
+		Handler: wrapHandler(func(args map[string]interface{}) (map[string]interface{}, error) {
+				scriptPath, _ := args["script_path"].(string)
+				var scriptArgs []string
+				if argsVal, ok := args["args"].([]interface{}); ok {
+					for _, a := range argsVal {
+						if s, ok := a.(string); ok {
+							scriptArgs = append(scriptArgs, s)
+						}
+					}
+				}
+				return terminalTool.RunScript(scriptPath, scriptArgs...)
+			}),
 		ParallelSafe:  false,
 	})
 }
@@ -184,7 +219,7 @@ type scriptArgs struct {
 	Args       []string `json:"args,omitempty"`
 }
 
-func wrapHandler(fn func(interface{}) (map[string]interface{}, error)) registry.Handler {
+func wrapHandler(fn func(map[string]interface{}) (map[string]interface{}, error)) registry.Handler {
 	return func(ctx context.Context, raw json.RawMessage) (string, error) {
 		var args map[string]interface{}
 		if err := json.Unmarshal(raw, &args); err != nil {

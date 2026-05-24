@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -73,6 +74,10 @@ type AIAgent struct {
 	// 规划系统
 	todoStore *builtin.TodoStore
 
+	// Skill 系统：skillMgr 为共享的发现/读取后端；activeSkills 是本 agent 私有的激活集合
+	skillMgr     *builtin.SkillManager
+	activeSkills map[string]bool
+
 	// 子 Agent 控制
 	depth    int  // 当前委托深度
 	isChild  bool // 是否是子 Agent
@@ -129,6 +134,122 @@ func (a *AIAgent) SetCustomPrompt(p string) {
 // SetMemoryContext 注入记忆上下文（直接设置，不走 Manager）
 func (a *AIAgent) SetMemoryContext(memCtx string) {
 	a.promptBuilder.SetMemoryContext(memCtx)
+}
+
+// SetSkillManager 挂载 skill 发现/读取后端。激活状态是 per-agent 的（见 a.activeSkills），
+// 父子 agent 可共享同一个 SkillManager，互不干扰。
+func (a *AIAgent) SetSkillManager(sm *builtin.SkillManager) {
+	a.skillMgr = sm
+}
+
+// setSkillActive 更新本 agent 的激活集合，并就地刷新 system prompt 中的 skill 块。
+func (a *AIAgent) setSkillActive(name string, active bool) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.activeSkills == nil {
+		a.activeSkills = make(map[string]bool)
+	}
+	if active {
+		a.activeSkills[name] = true
+	} else {
+		delete(a.activeSkills, name)
+	}
+	a.applySkillsBlockLocked()
+}
+
+// applySkillsBlockLocked 根据本 agent 的激活集合，就地替换 messages[0] 中的 skill 块。
+// 调用方需持有 a.mu。激活集合为空时移除该块。
+func (a *AIAgent) applySkillsBlockLocked() {
+	if a.skillMgr == nil || len(a.messages) == 0 || a.messages[0].Role != types.RoleSystem {
+		return
+	}
+	section := a.skillMgr.ActiveSection(a.activeSkills)
+	base := stripSkillsBlock(a.messages[0].Content)
+	if section != "" {
+		base = base + "\n\n" + skillsBlockStart + "\n" + section + "\n" + skillsBlockEnd
+	}
+	a.messages[0].Content = base
+}
+
+const (
+	skillsBlockStart = "<active-skills>"
+	skillsBlockEnd   = "</active-skills>"
+)
+
+// stripSkillsBlock 移除 system prompt 中已有的 active-skills 块（含标记），返回剩余内容。
+func stripSkillsBlock(content string) string {
+	start := strings.Index(content, skillsBlockStart)
+	if start == -1 {
+		return content
+	}
+	end := strings.Index(content, skillsBlockEnd)
+	if end == -1 || end < start {
+		return content
+	}
+	before := strings.TrimRight(content[:start], "\n")
+	after := strings.TrimLeft(content[end+len(skillsBlockEnd):], "\n")
+	if after == "" {
+		return before
+	}
+	return before + "\n\n" + after
+}
+
+// handleSkillsCall 处理本 agent 的 skills 工具调用（per-agent 激活状态）。
+func (a *AIAgent) handleSkillsCall(raw json.RawMessage) string {
+	var args struct {
+		Action string `json:"action"`
+		Name   string `json:"name,omitempty"`
+	}
+	if err := json.Unmarshal(raw, &args); err != nil {
+		return toolErrJSON("invalid arguments: %v", err)
+	}
+
+	switch args.Action {
+	case "list":
+		return a.skillMgr.ListJSON()
+	case "activate":
+		if args.Name == "" {
+			return toolErrJSON("name is required for activate")
+		}
+		info, ok := a.skillMgr.Lookup(args.Name)
+		if !ok {
+			return toolErrJSON("skill '%s' not found. Use action='list' to see available skills.", args.Name)
+		}
+		a.setSkillActive(args.Name, true)
+		log.Info("skills: activated", "name", args.Name, "session", a.config.SessionID)
+		return fmt.Sprintf("Skill '%s' activated and added to your system context.\n\n**%s**: %s\n\nUse `skills(action=read, name=%s)` to load its full instructions.",
+			args.Name, info.Name, info.Description, args.Name)
+	case "deactivate":
+		if args.Name == "" {
+			return toolErrJSON("name is required for deactivate")
+		}
+		a.setSkillActive(args.Name, false)
+		log.Info("skills: deactivated", "name", args.Name, "session", a.config.SessionID)
+		return fmt.Sprintf("Skill '%s' deactivated.", args.Name)
+	case "read":
+		if args.Name == "" {
+			return toolErrJSON("name is required for read")
+		}
+		a.mu.Lock()
+		isActive := a.activeSkills[args.Name]
+		a.mu.Unlock()
+		if !isActive {
+			return toolErrJSON("skill '%s' is not active. Call action='activate' first.", args.Name)
+		}
+		content, err := a.skillMgr.ReadContent(args.Name)
+		if err != nil {
+			return toolErrJSON("failed to read skill '%s': %v", args.Name, err)
+		}
+		return content
+	default:
+		return toolErrJSON("unknown action '%s'. Use: list, activate, deactivate, read", args.Action)
+	}
+}
+
+func toolErrJSON(format string, a ...any) string {
+	msg := fmt.Sprintf(format, a...)
+	b, _ := json.Marshal(map[string]any{"error": msg})
+	return string(b)
 }
 
 // SetMemoryManager 设置记忆管理器
@@ -277,6 +398,17 @@ func (a *AIAgent) conversationLoop(ctx context.Context) (string, error) {
 			}
 		}
 
+		// 注入 TODO reminder（临时塞到队尾，不持久化到 a.messages）
+		// 每轮重新生成，反映最新计划状态；持久化历史保持纯 append，前缀稳定，cache 友好
+		if a.todoStore != nil {
+			if todoSummary := a.todoStore.Summary(); todoSummary != "" {
+				msgs = append(msgs, types.Message{
+					Role:    types.RoleSystem,
+					Content: "<todo-reminder>\n" + todoSummary + "\nContinue with the next pending task. Mark it in_progress before starting.\n</todo-reminder>",
+				})
+			}
+		}
+
 		req := &model.ChatRequest{
 			Model:       modelName,
 			Messages:    msgs,
@@ -362,16 +494,6 @@ func (a *AIAgent) conversationLoop(ctx context.Context) (string, error) {
 			})
 			a.stats.ToolCalls++
 		}
-
-		// 注入 TODO system reminder（每轮 tool 执行后提醒当前计划状态）
-		if a.todoStore != nil {
-			if todoSummary := a.todoStore.Summary(); todoSummary != "" {
-				a.messages = append(a.messages, types.Message{
-					Role:    types.RoleSystem,
-					Content: "<todo-reminder>\n" + todoSummary + "\nContinue with the next pending task. Mark it in_progress before starting.\n</todo-reminder>",
-				})
-			}
-		}
 		a.mu.Unlock()
 
 		// 继续循环，让 LLM 看到工具结果
@@ -394,7 +516,16 @@ func (a *AIAgent) executeToolCalls(ctx context.Context, calls []types.ToolCall) 
 	var nonMemoryCalls []int // 非记忆工具的索引
 
 	for i, c := range calls {
-		if a.memoryMgr != nil && a.memoryMgr.HasTool(c.Function.Name) {
+		if a.skillMgr != nil && c.Function.Name == "skills" {
+			// skills 工具：per-agent 激活状态，由本 agent 处理（不走全局 registry handler）
+			results[i] = toolCallWithResult{
+				Call: c,
+				Result: types.ToolResult{
+					ToolCallID: c.ID,
+					Content:    a.handleSkillsCall(json.RawMessage(c.Function.Arguments)),
+				},
+			}
+		} else if a.memoryMgr != nil && a.memoryMgr.HasTool(c.Function.Name) {
 			// 记忆工具：直接路由到 MemoryManager
 			var args map[string]any
 			if err := json.Unmarshal([]byte(c.Function.Arguments), &args); err != nil {
@@ -569,6 +700,7 @@ func (a *AIAgent) NewChildAgent(task string) (*AIAgent, error) {
 	child.depth = a.depth + 1
 	child.isChild = true
 	child.todoStore = a.todoStore // 子 agent 共享 TODO 状态
+	child.skillMgr = a.skillMgr   // 共享发现后端；激活集合各自独立（activeSkills 默认空）
 
 	// 子 Agent 继承父 Agent 的事件回调（带前缀）
 	if a.eventCB != nil {

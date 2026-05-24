@@ -5,7 +5,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -89,7 +92,8 @@ func handleBash(ctx context.Context, raw json.RawMessage) (string, error) {
 
 	log.Debug("bash: executing", "command", truncateStr(args.Command, 200))
 
-	cmd := exec.CommandContext(ctx, "bash", "-c", args.Command)
+	shell, shellArgs := getShell()
+	cmd := exec.CommandContext(ctx, shell, shellArgs, args.Command)
 
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
@@ -150,6 +154,34 @@ func handleBash(ctx context.Context, raw json.RawMessage) (string, error) {
 		result = "(no output)"
 	}
 	return result, nil
+}
+
+// getShell detects the best available shell for the current platform.
+// On Windows, it looks for bash.exe via PATH, then via Git installation, then falls back to cmd.exe.
+// On other platforms, it uses bash.
+func getShell() (string, string) {
+	if runtime.GOOS != "windows" {
+		return "bash", "-c"
+	}
+
+	// 1. bash.exe directly in PATH (e.g. MSYS2, Cygwin, or user-added)
+	if bashPath, err := exec.LookPath("bash.exe"); err == nil {
+		return bashPath, "-c"
+	}
+
+	// 2. Find bash.exe relative to git.exe (Git for Windows ships bash in <git>\bin\)
+	if gitPath, err := exec.LookPath("git.exe"); err == nil {
+		// git.exe is in <git>\cmd\git.exe; bash is in <git>\bin\bash.exe
+		gitDir := filepath.Dir(gitPath)                // ...\Git\cmd
+		binDir := filepath.Join(gitDir, "..", "bin")   // ...\Git\bin
+		bashPath := filepath.Join(binDir, "bash.exe")
+		if _, err := os.Stat(bashPath); err == nil {
+			return bashPath, "-c"
+		}
+	}
+
+	// 3. Fallback: cmd.exe
+	return "cmd", "/c"
 }
 
 func truncateStr(s string, n int) string {

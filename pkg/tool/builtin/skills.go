@@ -15,16 +15,16 @@ import (
 )
 
 const (
-	skillsToolName  = "skills"
-	skillFileName   = "SKILL.md"
-	maxActiveSkills = 5
+	skillsToolName = "skills"
+	skillFileName  = "SKILL.md"
 )
 
-// SkillManager manages progressive skill discovery and activation.
+// SkillManager 负责 skill 的发现与内容读取（无激活状态）。
+// 激活状态是 per-agent 的，由各 agent 自己持有，SkillManager 仅作为发现/读取后端，
+// 因此父子 agent 可共享同一个 SkillManager 实例而互不干扰。
 type SkillManager struct {
 	mu          sync.RWMutex
 	discovered  map[string]*SkillInfo
-	active      []string
 	searchPaths []string
 }
 
@@ -33,8 +33,6 @@ type SkillInfo struct {
 	Name        string `json:"name"`
 	Path        string `json:"path"`
 	Description string `json:"description,omitempty"`
-	Active      bool   `json:"active"`
-	Content     string `json:"-"`
 }
 
 // NewSkillManager creates a skill manager and scans for skills.
@@ -70,11 +68,10 @@ func (sm *SkillManager) scan() {
 				continue
 			}
 
-			desc := extractDescription(skillPath)
 			sm.discovered[name] = &SkillInfo{
 				Name:        name,
 				Path:        skillPath,
-				Description: desc,
+				Description: extractDescription(skillPath),
 			}
 		}
 	}
@@ -87,19 +84,69 @@ func extractDescription(path string) string {
 	if err != nil {
 		return ""
 	}
-
-	lines := strings.Split(string(data), "\n")
-	for _, line := range lines {
+	for _, line := range strings.Split(string(data), "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
 		if len(line) > 120 {
-			line = line[:120] + "..."
+			return line[:120] + "..."
 		}
 		return line
 	}
 	return ""
+}
+
+// Lookup 按名称返回已发现的 skill 信息。
+func (sm *SkillManager) Lookup(name string) (*SkillInfo, bool) {
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
+	info, ok := sm.discovered[name]
+	return info, ok
+}
+
+// ReadContent 读取某个已发现 skill 的完整 SKILL.md 内容。
+func (sm *SkillManager) ReadContent(name string) (string, error) {
+	sm.mu.RLock()
+	info, ok := sm.discovered[name]
+	sm.mu.RUnlock()
+	if !ok {
+		return "", fmt.Errorf("skill '%s' not found", name)
+	}
+	data, err := os.ReadFile(info.Path)
+	if err != nil {
+		return "", err
+	}
+	log.Info("skills: read", "name", name, "bytes", len(data))
+	return string(data), nil
+}
+
+// ActiveSection 根据给定的激活集合构建描述块（名称+描述），无激活时返回 ""。
+// 激活集合由调用方（agent）持有，SkillManager 只负责按发现的元数据渲染。
+func (sm *SkillManager) ActiveSection(active map[string]bool) string {
+	if len(active) == 0 {
+		return ""
+	}
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
+
+	var infos []*SkillInfo
+	for name := range active {
+		if info, ok := sm.discovered[name]; ok {
+			infos = append(infos, info)
+		}
+	}
+	if len(infos) == 0 {
+		return ""
+	}
+
+	var sb strings.Builder
+	sb.WriteString("## Active Skills\n\n")
+	for _, info := range infos {
+		sb.WriteString(fmt.Sprintf("- **%s**: %s\n", info.Name, info.Description))
+	}
+	sb.WriteString("\nUse `skills(action=read, name=<skill>)` to load a skill's full instructions.")
+	return sb.String()
 }
 
 // RegisterTool registers the skills tool in the global registry.
@@ -111,13 +158,12 @@ func (sm *SkillManager) RegisterTool() {
 			Type: "function",
 			Function: types.FunctionSchema{
 				Name: skillsToolName,
-				Description: "Discover and activate skills (reusable prompt-driven capabilities). " +
-					"Skills are loaded from SKILL.md files in the skills directories.\n\n" +
+				Description: "Discover and use skills (reusable prompt-driven capabilities loaded from SKILL.md files).\n\n" +
 					"ACTIONS:\n" +
-					"- list: Show all discovered skills and their activation status\n" +
-					"- activate: Load a skill's full instructions (max 5 active)\n" +
-					"- deactivate: Unload a skill to free a slot\n" +
-					"- read: Get the full content of an active skill",
+					"- list: Show all discovered skills and their descriptions\n" +
+					"- activate: Activate a skill — injects its description into context so you stay aware of it\n" +
+					"- deactivate: Deactivate a skill when it is no longer needed\n" +
+					"- read: Load the full instructions for an active skill",
 				Parameters: mustJSON(map[string]any{
 					"type": "object",
 					"properties": map[string]any{
@@ -128,7 +174,7 @@ func (sm *SkillManager) RegisterTool() {
 						},
 						"name": map[string]any{
 							"type":        "string",
-							"description": "Skill name (required for activate/deactivate/read).",
+							"description": "Skill name (required for activate, deactivate, read).",
 						},
 					},
 					"required": []string{"action"},
@@ -145,154 +191,38 @@ type skillsArgs struct {
 	Name   string `json:"name,omitempty"`
 }
 
+// handleSkillsTool 是注册到 registry 的 fallback handler，仅用于暴露 schema。
+// 实际执行（activate/deactivate/read 的 per-agent 状态）由 agent 在 executeToolCalls
+// 中拦截处理；此 handler 只在未挂载到 agent 的退化场景被调用，支持无状态的 list。
 func (sm *SkillManager) handleSkillsTool(_ context.Context, raw json.RawMessage) (string, error) {
 	var args skillsArgs
 	if err := json.Unmarshal(raw, &args); err != nil {
 		return toolErr("invalid arguments: %v", err), nil
 	}
-
-	switch args.Action {
-	case "list":
-		return sm.listSkills(), nil
-	case "activate":
-		if args.Name == "" {
-			return toolErr("name is required for activate"), nil
-		}
-		return sm.activateSkill(args.Name), nil
-	case "deactivate":
-		if args.Name == "" {
-			return toolErr("name is required for deactivate"), nil
-		}
-		return sm.deactivateSkill(args.Name), nil
-	case "read":
-		if args.Name == "" {
-			return toolErr("name is required for read"), nil
-		}
-		return sm.readSkill(args.Name), nil
-	default:
-		return toolErr("Unknown action '%s'. Use: list, activate, deactivate, read", args.Action), nil
+	if args.Action == "list" {
+		return sm.ListJSON(), nil
 	}
+	return toolErr("skills action '%s' requires an agent context", args.Action), nil
 }
 
-func (sm *SkillManager) listSkills() string {
+// ListJSON 返回所有已发现 skill 的名称+描述（JSON 字符串）。
+func (sm *SkillManager) ListJSON() string {
 	sm.mu.RLock()
 	defer sm.mu.RUnlock()
 
-	type skillSummary struct {
+	type entry struct {
 		Name        string `json:"name"`
 		Description string `json:"description,omitempty"`
-		Active      bool   `json:"active"`
 	}
 
-	var skills []skillSummary
+	skills := make([]entry, 0, len(sm.discovered))
 	for _, info := range sm.discovered {
-		skills = append(skills, skillSummary{
-			Name:        info.Name,
-			Description: info.Description,
-			Active:      info.Active,
-		})
+		skills = append(skills, entry{Name: info.Name, Description: info.Description})
 	}
 
-	result := map[string]any{
-		"skills":     skills,
-		"total":      len(skills),
-		"active":     len(sm.active),
-		"max_active": maxActiveSkills,
-		"slots_free": maxActiveSkills - len(sm.active),
-	}
-
-	b, _ := json.MarshalIndent(result, "", "  ")
+	b, _ := json.MarshalIndent(map[string]any{
+		"skills": skills,
+		"total":  len(skills),
+	}, "", "  ")
 	return string(b)
-}
-
-func (sm *SkillManager) activateSkill(name string) string {
-	sm.mu.Lock()
-	defer sm.mu.Unlock()
-
-	info, exists := sm.discovered[name]
-	if !exists {
-		return toolErr("Skill '%s' not found. Use action='list' to see available skills.", name)
-	}
-
-	if info.Active {
-		return fmt.Sprintf("Skill '%s' is already active.", name)
-	}
-
-	if len(sm.active) >= maxActiveSkills {
-		return toolErr("Maximum %d active skills reached. Deactivate one first. Active: %v",
-			maxActiveSkills, sm.active)
-	}
-
-	data, err := os.ReadFile(info.Path)
-	if err != nil {
-		return toolErr("Failed to load skill '%s': %v", name, err)
-	}
-
-	info.Content = string(data)
-	info.Active = true
-	sm.active = append(sm.active, name)
-
-	log.Info("skills: activated", "name", name, "content_len", len(info.Content))
-
-	return fmt.Sprintf("Skill '%s' activated (%d/%d slots used). Use action='read' to view its instructions.",
-		name, len(sm.active), maxActiveSkills)
-}
-
-func (sm *SkillManager) deactivateSkill(name string) string {
-	sm.mu.Lock()
-	defer sm.mu.Unlock()
-
-	info, exists := sm.discovered[name]
-	if !exists {
-		return toolErr("Skill '%s' not found.", name)
-	}
-
-	if !info.Active {
-		return fmt.Sprintf("Skill '%s' is not active.", name)
-	}
-
-	info.Active = false
-	info.Content = ""
-
-	for i, n := range sm.active {
-		if n == name {
-			sm.active = append(sm.active[:i], sm.active[i+1:]...)
-			break
-		}
-	}
-
-	log.Info("skills: deactivated", "name", name)
-
-	return fmt.Sprintf("Skill '%s' deactivated (%d/%d slots used).",
-		name, len(sm.active), maxActiveSkills)
-}
-
-func (sm *SkillManager) readSkill(name string) string {
-	sm.mu.RLock()
-	defer sm.mu.RUnlock()
-
-	info, exists := sm.discovered[name]
-	if !exists {
-		return toolErr("Skill '%s' not found.", name)
-	}
-
-	if !info.Active {
-		return toolErr("Skill '%s' is not active. Use action='activate' first.", name)
-	}
-
-	return info.Content
-}
-
-// GetActiveSkillContents returns all active skill contents for system prompt injection.
-func (sm *SkillManager) GetActiveSkillContents() map[string]string {
-	sm.mu.RLock()
-	defer sm.mu.RUnlock()
-
-	result := make(map[string]string)
-	for _, name := range sm.active {
-		if info, ok := sm.discovered[name]; ok && info.Active && info.Content != "" {
-			result[name] = info.Content
-		}
-	}
-	return result
 }

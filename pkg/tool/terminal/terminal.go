@@ -2,9 +2,12 @@ package terminal
 
 import (
 	"bufio"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"runtime"
 	"strings"
 
 	"code.byted.org/ad_creative/hermes_agent_go/pkg/errx"
@@ -15,26 +18,67 @@ type TerminalTool struct {
 	shell string
 }
 
+// resolveShell detects the best available shell for the current platform.
+func resolveShell() string {
+	if runtime.GOOS != "windows" {
+		shell := os.Getenv("SHELL")
+		if shell == "" {
+			shell = "/bin/bash"
+		}
+		return shell
+	}
+
+	// 1. bash.exe directly in PATH (e.g. MSYS2, Cygwin, or user-added)
+	if bashPath, err := exec.LookPath("bash.exe"); err == nil {
+		return bashPath
+	}
+
+	// 2. Find bash.exe relative to git.exe (Git for Windows ships bash in <git>\bin\)
+	if gitPath, err := exec.LookPath("git.exe"); err == nil {
+		gitDir := filepath.Dir(gitPath)
+		binDir := filepath.Join(gitDir, "..", "bin")
+		bashPath := filepath.Join(binDir, "bash.exe")
+		if _, err := os.Stat(bashPath); err == nil {
+			return bashPath
+		}
+	}
+
+	// 3. Try PowerShell
+	if psPath, err := exec.LookPath("powershell.exe"); err == nil {
+		return psPath
+	}
+
+	// 4. Fallback: cmd.exe
+	return "cmd.exe"
+}
+
 // NewTerminalTool 创建终端工具实例
 func NewTerminalTool() *TerminalTool {
-	shell := os.Getenv("SHELL")
-	if shell == "" {
-		shell = "/bin/bash"
-	}
 	return &TerminalTool{
-		shell: shell,
+		shell: resolveShell(),
 	}
 }
 
 // ExecuteCommand 执行终端命令
 func (t *TerminalTool) ExecuteCommand(command string, args ...string) (map[string]interface{}, error) {
 	var cmd *exec.Cmd
-	
+
 	if len(args) > 0 {
 		cmd = exec.Command(command, args...)
 	} else {
 		// 使用shell执行复杂命令
-		cmd = exec.Command(t.shell, "-c", command)
+		if runtime.GOOS == "windows" {
+			if strings.HasSuffix(t.shell, "cmd.exe") {
+				cmd = exec.Command(t.shell, "/c", command)
+			} else if strings.HasSuffix(t.shell, "powershell.exe") || strings.HasSuffix(t.shell, "pwsh.exe") {
+				cmd = exec.Command(t.shell, "-Command", command) // PowerShell 用 -Command
+			} else {
+				// bash.exe 等
+				cmd = exec.Command(t.shell, "-c", command)
+			}
+		} else {
+			cmd = exec.Command(t.shell, "-c", command)
+		}
 	}
 
 	// 捕获输出和错误
@@ -43,14 +87,14 @@ func (t *TerminalTool) ExecuteCommand(command string, args ...string) (map[strin
 	cmd.Stderr = &stderr
 
 	err := cmd.Run()
-	
+
 	result := make(map[string]interface{})
 	result["command"] = command
 	result["args"] = args
 	result["stdout"] = stdout.String()
 	result["stderr"] = stderr.String()
 	result["exit_code"] = 0
-	
+
 	if err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok {
 			result["exit_code"] = exitErr.ExitCode()
@@ -69,13 +113,13 @@ func (t *TerminalTool) InteractiveSession(prompt string) (map[string]interface{}
 
 	scanner := bufio.NewScanner(os.Stdin)
 	fmt.Print(prompt)
-	
+
 	for scanner.Scan() {
 		line := scanner.Text()
 		if strings.TrimSpace(line) == "exit" || strings.TrimSpace(line) == "quit" {
 			break
 		}
-		
+
 		// 执行命令
 		cmdResult, err := t.ExecuteCommand(line)
 		if err != nil {
@@ -86,7 +130,7 @@ func (t *TerminalTool) InteractiveSession(prompt string) (map[string]interface{}
 				output = append(output, fmt.Sprintf("Stderr: %s", cmdResult["stderr"].(string)))
 			}
 		}
-		
+
 		fmt.Print(prompt)
 	}
 
@@ -101,19 +145,19 @@ func (t *TerminalTool) InteractiveSession(prompt string) (map[string]interface{}
 // GetTerminalInfo 获取终端信息
 func (t *TerminalTool) GetTerminalInfo() (map[string]interface{}, error) {
 	result := make(map[string]interface{})
-	
+
 	// 获取终端类型
 	result["term"] = os.Getenv("TERM")
-	
+
 	// 获取shell路径
 	result["shell"] = t.shell
-	
+
 	// 获取终端大小
 	// 注意：这个功能需要额外的库或系统调用
 	// 这里暂时返回默认值
 	result["width"] = 80
 	result["height"] = 24
-	
+
 	// 获取当前工作目录
 	cwd, err := os.Getwd()
 	if err == nil {
@@ -137,7 +181,7 @@ func (t *TerminalTool) GetTerminalInfo() (map[string]interface{}, error) {
 func (t *TerminalTool) ParseCommandOutput(output string, parser string) (map[string]interface{}, error) {
 	result := make(map[string]interface{})
 	result["raw_output"] = output
-	
+
 	// 根据解析器类型处理输出
 	switch strings.ToLower(parser) {
 	case "json":
@@ -185,9 +229,11 @@ func (t *TerminalTool) RunScript(scriptPath string, args ...string) (map[string]
 		return nil, errx.Wrap(err, "script file not found")
 	}
 
-	// 使脚本可执行
-	if err := os.Chmod(scriptPath, 0755); err != nil {
-		return nil, errx.Wrap(err, "failed to make script executable")
+	// 使脚本可执行 (Unix only; no-op on Windows)
+	if runtime.GOOS != "windows" {
+		if err := os.Chmod(scriptPath, 0755); err != nil {
+			return nil, errx.Wrap(err, "failed to make script executable")
+		}
 	}
 
 	// 执行脚本
