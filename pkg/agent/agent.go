@@ -65,6 +65,9 @@ type AIAgent struct {
 	// 记忆系统
 	memoryMgr *memory.Manager
 
+	// 本轮记忆预取缓存:每轮在 Run 中用真实 query 构建,conversationLoop 注入,轮末清空
+	pendingMemoryCtx string
+
 	// 运行统计
 	stats Stats
 
@@ -299,19 +302,26 @@ func (a *AIAgent) Run(ctx context.Context, userInput string) (string, error) {
 	a.turnNum++
 	a.mu.Unlock()
 
-	// pre-turn: 记忆预取
+	// pre-turn: 记忆预取(每轮一次,用真实 query;结果包成上下文块缓存,供本轮注入)
 	if a.memoryMgr != nil {
 		a.memoryMgr.OnTurnStart(a.turnNum, userInput, nil)
 		memCtx := a.memoryMgr.PrefetchAll(ctx, userInput, a.config.SessionID)
-		if memCtx != "" {
-			// 构建围栏上下文块，注入到最新消息前（API 调用时注入，不持久化）
+		block := memory.BuildContextBlock(memCtx)
+		a.mu.Lock()
+		a.pendingMemoryCtx = block
+		a.mu.Unlock()
+		if block != "" {
 			a.emitEvent(Event{Type: EventMemory, Content: "memory context recalled"})
-			_ = memCtx // 上下文注入在 conversationLoop 中处理
 		}
 	}
 
 	// 核心对话循环
 	reply, err := a.conversationLoop(ctx)
+
+	// 清空本轮预取缓存
+	a.mu.Lock()
+	a.pendingMemoryCtx = ""
+	a.mu.Unlock()
 
 	// post-turn: 同步记忆
 	if err == nil && a.memoryMgr != nil {
@@ -369,32 +379,28 @@ func (a *AIAgent) conversationLoop(ctx context.Context) (string, error) {
 		copy(msgs, a.messages)
 		a.mu.Unlock()
 
-		// 注入记忆预取上下文（在 API 调用时注入，不持久化到 a.messages）
-		if a.memoryMgr != nil {
-			memCtx := a.memoryMgr.PrefetchAll(ctx, "", a.config.SessionID)
-			if memCtx != "" {
-				contextBlock := memory.BuildContextBlock(memCtx)
-				if contextBlock != "" {
-					// 在用户消息之前插入一条记忆上下文消息
-					injected := make([]types.Message, 0, len(msgs)+1)
-					// 找到最后一条用户消息的位置
-					lastUserIdx := -1
-					for i := len(msgs) - 1; i >= 0; i-- {
-						if msgs[i].Role == types.RoleUser {
-							lastUserIdx = i
-							break
-						}
-					}
-					if lastUserIdx > 0 {
-						injected = append(injected, msgs[:lastUserIdx]...)
-						injected = append(injected, types.Message{
-							Role:    types.RoleSystem,
-							Content: contextBlock,
-						})
-						injected = append(injected, msgs[lastUserIdx:]...)
-						msgs = injected
-					}
+		// 注入本轮预取的记忆上下文(已在 Run 中构建并缓存;非持久化注入,保持持久化前缀稳定)
+		a.mu.Lock()
+		contextBlock := a.pendingMemoryCtx
+		a.mu.Unlock()
+		if contextBlock != "" {
+			// 在最后一条用户消息之前插入记忆上下文
+			lastUserIdx := -1
+			for i := len(msgs) - 1; i >= 0; i-- {
+				if msgs[i].Role == types.RoleUser {
+					lastUserIdx = i
+					break
 				}
+			}
+			if lastUserIdx > 0 {
+				injected := make([]types.Message, 0, len(msgs)+1)
+				injected = append(injected, msgs[:lastUserIdx]...)
+				injected = append(injected, types.Message{
+					Role:    types.RoleSystem,
+					Content: contextBlock,
+				})
+				injected = append(injected, msgs[lastUserIdx:]...)
+				msgs = injected
 			}
 		}
 
