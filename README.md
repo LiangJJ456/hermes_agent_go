@@ -96,8 +96,11 @@ export OPENAI_API_KEY="sk-..."
 # Optional: custom API endpoint (for Azure, local LLM, etc.)
 export OPENAI_BASE_URL="https://api.openai.com/v1"
 
-# Optional: model override (default: openai/gpt-4o)
+# Optional: model override in provider/model format (default: openai/gpt-4o).
+# The provider prefix selects the backend: "deepseek/..." uses the DeepSeek
+# provider; anything else uses the OpenAI-compatible provider.
 export HERMES_MODEL="openai/gpt-4o"
+# e.g. DeepSeek: export HERMES_MODEL="deepseek/deepseek-chat"
 ```
 
 ### 3. Run
@@ -157,7 +160,7 @@ Create `~/.hermes/mcp.json`:
 |---|---|---|
 | `OPENAI_API_KEY` | -- | **Required.** OpenAI-compatible API key |
 | `OPENAI_BASE_URL` | `https://api.openai.com/v1` | Custom API base URL |
-| `HERMES_MODEL` | `openai/gpt-4o` | Model identifier (`provider/model` format) |
+| `HERMES_MODEL` | `openai/gpt-4o` | Model in `provider/model` format. Prefix `deepseek/` selects the DeepSeek provider; otherwise the OpenAI-compatible provider is used |
 | `HERMES_HOME` | `~/.hermes` | Root directory for config, memories, palace data |
 | `HERMES_MEMPALACE` | `1` (enabled) | Set to `0` to disable the MemPalace provider |
 
@@ -170,6 +173,7 @@ Create `~/.hermes/mcp.json`:
 | `/quit` or `/exit` | Gracefully close the agent, MCP servers, and exit |
 | `/stats` | Show session statistics (iterations, tool calls, token usage) |
 | `/budget` | Display remaining iteration budget |
+| `/todo` | Show the current TODO plan and progress |
 | `/mcp` | List connected MCP servers and their registered tools |
 
 Any other input is treated as a natural-language message sent to the agent.
@@ -209,7 +213,10 @@ hermes_agent_go/
 |   |   +-- provider.go         # Model provider interface
 |   |   +-- router.go           # Multi-provider model router
 |   |   +-- openai/
-|   |       +-- provider.go     # OpenAI-compatible provider
+|   |   |   +-- provider.go     # OpenAI-compatible provider
+|   |   +-- deepseek/
+|   |       +-- provider.go     # DeepSeek provider (reasoning_content, cache tokens)
+|   |       +-- retry.go        # Retry / backoff config
 |   +-- tool/
 |   |   +-- registry/
 |   |   |   +-- registry.go     # Global tool registry
@@ -387,9 +394,10 @@ Tools follow a unified interface and are registered in a global registry:
 | Category | Tools | Description |
 |---|---|---|
 | **Builtin** | `bash`, `read_file`, `write_file`, `edit_file`, `list_dir`, `search_files` | Core file system and shell operations |
+| **Skills** | `skills` | Discover, activate, and load SKILL.md-based capabilities on demand (per-agent activation state) |
 | **Web** | `web_get`, `web_post`, `web_scrape`, `web_download` | HTTP requests, web scraping, and file downloads |
 | **Terminal** | `terminal_exec`, `terminal_interactive`, `terminal_info`, `terminal_parse`, `terminal_script` | Terminal command execution and interaction |
-| **Delegate** | `delegate` | Spawn sub-agents for complex sub-tasks |
+| **Delegate** | `delegate_task` | Spawn sub-agents for complex sub-tasks |
 | **MCP** | (dynamic) | Tools discovered from MCP servers at runtime |
 | **Memory** | `palace_search`, `palace_add`, `palace_kg_query`, `palace_kg_add`, `palace_kg_invalidate` | MemPalace memory interaction tools |
 
