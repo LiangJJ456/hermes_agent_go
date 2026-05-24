@@ -157,14 +157,38 @@ func (p *Provider) SystemPromptBlock() string {
 	return wakeUp
 }
 
+// 预取相关性闸门参数
+const (
+	prefetchCandidatePool = 8    // L3 候选池大小(过滤前)
+	prefetchTopN          = 3    // 过滤后注入上限
+	prefetchMinVecSim     = 0.35 // 向量相似度下限
+	prefetchBM25Epsilon   = 0.0  // BM25 命中阈值(>epsilon 视为真实 query 重叠)
+)
+
+// filterRelevant 仅保留有真实 query 命中信号的结果,剔除只靠 importance 撑分、
+// query 零命中的抽屉,然后截断到 limit 条。
+func filterRelevant(results []SearchResult, minVecSim, bm25Epsilon float64, limit int) []SearchResult {
+	kept := make([]SearchResult, 0, len(results))
+	for _, r := range results {
+		if r.VectorScore >= minVecSim || r.BM25Score > bm25Epsilon {
+			kept = append(kept, r)
+		}
+	}
+	if len(kept) > limit {
+		kept = kept[:limit]
+	}
+	return kept
+}
+
 // Prefetch searches the palace for context relevant to the current query.
 func (p *Provider) Prefetch(_ context.Context, query string, _ string) string {
 	if p.stack == nil || query == "" {
 		return ""
 	}
 
-	// L3 search for relevant memories
-	results := p.stack.L3.SearchRaw(query, "", "", 3)
+	// L3 search,然后按真实 query 相关性过滤(剔除仅 importance 撑分的抽屉)
+	results := p.stack.L3.SearchRaw(query, "", "", prefetchCandidatePool)
+	results = filterRelevant(results, prefetchMinVecSim, prefetchBM25Epsilon, prefetchTopN)
 	if len(results) == 0 {
 		return ""
 	}
