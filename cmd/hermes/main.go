@@ -266,6 +266,7 @@ func main() {
 	}
 
 	// 设置事件回调（CLI 输出）
+	streamedThisTurn := false
 	ag.SetEventCallback(func(e agent.Event) {
 		switch e.Type {
 		case agent.EventToolStart:
@@ -274,6 +275,7 @@ func main() {
 			fmt.Fprintf(os.Stderr, "  ✓ %s\n", e.ToolName)
 		case agent.EventStreamDelta:
 			fmt.Print(e.Content)
+			streamedThisTurn = true
 		case agent.EventCompression:
 			fmt.Fprintf(os.Stderr, "  📦 %s\n", e.Content)
 		case agent.EventBudgetWarn:
@@ -365,12 +367,19 @@ func main() {
 			continue
 		}
 
-		_, _, err := ag.Run(ctx, input)
+		streamedThisTurn = false
+		reply, _, err := ag.Run(ctx, input)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "\n❌ Error: %v\n", err)
 			continue
 		}
-		fmt.Println()
+		// Stream deltas are already printed via EventStreamDelta callback.
+		// Only print reply if it wasn't streamed (i.e., no streaming callback fired).
+		if !streamedThisTurn && reply != "" {
+			fmt.Println(reply)
+		} else {
+			fmt.Println() // newline after streamed output
+		}
 	}
 }
 

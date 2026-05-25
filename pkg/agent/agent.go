@@ -160,6 +160,12 @@ func (a *AIAgent) wireRunners() {
 	if entry, ok := orchestrator.LookupNodeType("llm"); ok {
 		if r, ok := entry.Runner.(*orchrunner.LLMRunner); ok {
 			r.SetInvoker(a.llmInvoker)
+			// Wire streaming: delegate to executor's tracer
+			r.OnStreamDelta = func(ctx context.Context, delta string) {
+				if a.executor.Tracer != nil {
+					a.executor.Tracer.OnStreamDelta(ctx, delta)
+				}
+			}
 		}
 	}
 	if entry, ok := orchestrator.LookupNodeType("tool"); ok {

@@ -35,9 +35,13 @@ type LLMInvoker interface {
 		tools []string, cfg LLMConfig, onDelta func(string)) (*orchestrator.NodeResult, error)
 }
 
+// StreamDeltaFunc is a callback for streaming LLM output deltas.
+type StreamDeltaFunc func(ctx context.Context, content string)
+
 // LLMRunner executes an LLM node by delegating to an LLMInvoker.
 type LLMRunner struct {
-	Invoker LLMInvoker
+	Invoker       LLMInvoker
+	OnStreamDelta StreamDeltaFunc // optional: called for each streaming delta
 }
 
 // SetInvoker sets the LLM invoker (called after construction).
@@ -78,6 +82,12 @@ func (r *LLMRunner) Run(ctx context.Context, node *orchestrator.NodeSpec,
 		messages = append(messages, LLMMessage{Role: "user", Content: userContent})
 	}
 
+	// Use streaming if OnStreamDelta callback is set
+	if r.OnStreamDelta != nil {
+		return r.Invoker.ChatStream(ctx, cfg.Model, messages, cfg.Tools, cfg, func(delta string) {
+			r.OnStreamDelta(ctx, delta)
+		})
+	}
 	return r.Invoker.Chat(ctx, cfg.Model, messages, cfg.Tools, cfg)
 }
 
