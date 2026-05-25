@@ -7,6 +7,7 @@ import (
 
 	"code.byted.org/ad_creative/hermes_agent_go/pkg/orchestrator"
 	agcontext "code.byted.org/ad_creative/hermes_agent_go/pkg/orchestrator/context"
+	"code.byted.org/ad_creative/hermes_agent_go/pkg/trace"
 )
 
 // ToolConfig configures a tool node.
@@ -47,6 +48,16 @@ func (r *ToolRunner) Run(ctx context.Context, node *orchestrator.NodeSpec,
 
 	if r.Invoker == nil {
 		return nil, fmt.Errorf("tool runner: no invoker configured")
+	}
+
+	// Write tool info to current span for tracing/event callbacks
+	if span := trace.SpanFromContext(ctx); span != nil {
+		span.SetAttribute("tool_name", cfg.Resource)
+		if input != nil {
+			if b, merr := json.Marshal(input); merr == nil {
+				span.SetAttribute("tool_args", string(b))
+			}
+		}
 	}
 
 	result, err := r.Invoker.Invoke(ctx, cfg.Resource, input, cfg.Timeout)

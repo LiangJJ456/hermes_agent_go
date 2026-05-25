@@ -12,6 +12,7 @@ import (
 )
 
 type ctxKey struct{}
+type spanKey struct{}
 
 // SpanContext 携带在 context 中的链路信息
 type SpanContext struct {
@@ -100,4 +101,15 @@ func WithSpanContext(ctx context.Context, sc SpanContext) context.Context {
 func FromContext(ctx context.Context) (SpanContext, bool) {
 	sc, ok := ctx.Value(ctxKey{}).(SpanContext)
 	return sc, ok
+}
+
+// WithSpan 将 *Span 注入 ctx
+func WithSpan(ctx context.Context, s *Span) context.Context {
+	return context.WithValue(ctx, spanKey{}, s)
+}
+
+// SpanFromContext 从 ctx 中提取当前 *Span
+func SpanFromContext(ctx context.Context) *Span {
+	s, _ := ctx.Value(spanKey{}).(*Span)
+	return s
 }

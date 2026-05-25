@@ -52,6 +52,7 @@ func StartSpan(ctx context.Context, name, nodeType string) (context.Context, *Sp
 		SpanID:   s.SpanID,
 		ParentID: s.ParentID,
 	})
+	newCtx = WithSpan(newCtx, s)
 	return newCtx, s
 }
 
@@ -78,6 +79,14 @@ func (s *Span) End(err error) {
 		s.Status = SpanError
 		s.Error = err.Error()
 	}
+}
+
+// GetAttribute 读取 span 属性（线程安全）
+func (s *Span) GetAttribute(k string) (any, bool) {
+	s.mu.Lock()
+	v, ok := s.Attributes[k]
+	s.mu.Unlock()
+	return v, ok
 }
 
 // Duration 返回 span 执行时长

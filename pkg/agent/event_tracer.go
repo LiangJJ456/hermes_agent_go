@@ -22,14 +22,7 @@ func newEventTracer(cb EventCallback, inner trace.Tracer) *eventTracer {
 }
 
 func (t *eventTracer) StartNodeSpan(ctx context.Context, nodeID, nodeType string) (context.Context, *trace.Span) {
-	ctx, span := t.inner.StartNodeSpan(ctx, nodeID, nodeType)
-	if t.cb != nil {
-		switch nodeType {
-		case "tool":
-			t.cb(Event{Type: EventToolStart, ToolName: nodeID, Timestamp: time.Now()})
-		}
-	}
-	return ctx, span
+	return t.inner.StartNodeSpan(ctx, nodeID, nodeType)
 }
 
 func (t *eventTracer) EndNodeSpan(span *trace.Span, err error) {
@@ -43,7 +36,20 @@ func (t *eventTracer) EndNodeSpan(span *trace.Span, err error) {
 	}
 	switch span.NodeType {
 	case "tool":
-		t.cb(Event{Type: EventToolEnd, ToolName: span.Name, Timestamp: time.Now()})
+		toolName := span.Name
+		var toolArgs string
+		if n, ok := span.GetAttribute("tool_name"); ok {
+			if s, ok := n.(string); ok && s != "" {
+				toolName = s
+			}
+		}
+		if a, ok := span.GetAttribute("tool_args"); ok {
+			if s, ok := a.(string); ok {
+				toolArgs = s
+			}
+		}
+		t.cb(Event{Type: EventToolStart, ToolName: toolName, ToolArgs: toolArgs, Timestamp: span.StartTime})
+		t.cb(Event{Type: EventToolEnd, ToolName: toolName, ToolArgs: toolArgs, Timestamp: time.Now()})
 	}
 }
 
