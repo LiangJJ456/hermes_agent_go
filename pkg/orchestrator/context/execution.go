@@ -18,11 +18,13 @@ type WorkingMemory struct {
 }
 
 // NewWorkingMemory creates working memory initialized with input.
+// LastResult is also set to input so the first node in the graph receives it.
 func NewWorkingMemory(input interface{}) *WorkingMemory {
 	return &WorkingMemory{
 		Input:      input,
 		State:      make(map[string]interface{}),
 		Scratchpad: make([]string, 0),
+		LastResult: input,
 	}
 }
 
