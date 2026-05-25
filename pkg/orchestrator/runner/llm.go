@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"code.byted.org/ad_creative/hermes_agent_go/pkg/orchestrator"
+	agcontext "code.byted.org/ad_creative/hermes_agent_go/pkg/orchestrator/context"
 )
 
 // LLMConfig configures an llm node.
@@ -60,13 +61,22 @@ func (r *LLMRunner) Run(ctx context.Context, node *orchestrator.NodeSpec,
 		return nil, fmt.Errorf("llm runner: no invoker configured")
 	}
 
-	// Build messages: system prompt (if set) then user input
+	// Build messages: prefer full conversation history from ConvMem
 	var messages []LLMMessage
-	if cfg.SystemPrompt != "" {
-		messages = append(messages, LLMMessage{Role: "system", Content: cfg.SystemPrompt})
+
+	if ec, ok := execCtx.(*agcontext.ExecutionContext); ok && ec.ConvMem != nil && len(ec.ConvMem.Messages) > 0 {
+		// Use full conversation history (system + all user/assistant turns)
+		for _, m := range ec.ConvMem.Messages {
+			messages = append(messages, LLMMessage{Role: m.Role, Content: m.Content, Name: m.Name})
+		}
+	} else {
+		// Fallback: single-turn (backward compatible)
+		if cfg.SystemPrompt != "" {
+			messages = append(messages, LLMMessage{Role: "system", Content: cfg.SystemPrompt})
+		}
+		userContent := formatInput(input)
+		messages = append(messages, LLMMessage{Role: "user", Content: userContent})
 	}
-	userContent := formatInput(input)
-	messages = append(messages, LLMMessage{Role: "user", Content: userContent})
 
 	return r.Invoker.Chat(ctx, cfg.Model, messages, cfg.Tools, cfg)
 }

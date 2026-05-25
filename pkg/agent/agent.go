@@ -384,18 +384,14 @@ func (a *AIAgent) Run(ctx context.Context, userInput string) (string, bool, erro
 	a.convMem.Messages = messagesToOrchMessages(a.messages)
 	a.mu.Unlock()
 
-	// Set system prompt on the LLM node (protected by mu for concurrent safety)
-	a.mu.Lock()
-	if llmNode, ok := a.graph.Nodes["llm"]; ok {
-		if llmCfg, ok := llmNode.ParsedConfig.(*orchrunner.LLMConfig); ok {
-			sysPrompt := a.promptBuilder.Build().Content
-			llmCfg.SystemPrompt = sysPrompt
-		}
+	// Build ExecutionContext with full conversation history
+	ec := &orchcontext.ExecutionContext{
+		WorkMem: orchcontext.NewWorkingMemory(userInput),
+		ConvMem: a.convMem,
 	}
-	a.mu.Unlock()
 
-	// Execute the graph
-	output, snap, err := a.executor.Execute(ctx, a.graph, userInput)
+	// Execute the graph with full conversation context
+	output, snap, err := a.executor.ExecuteWithContext(ctx, a.graph, ec)
 	if err != nil {
 		return "", false, err
 	}
@@ -411,14 +407,12 @@ func (a *AIAgent) Run(ctx context.Context, userInput string) (string, bool, erro
 
 	// Add assistant response to message history
 	a.mu.Lock()
-	if outputMap, ok := output.(map[string]interface{}); ok {
-		if content, ok := outputMap["content"].(string); ok && content != "" {
-			a.messages = append(a.messages, types.Message{
-				Role:      types.RoleAssistant,
-				Content:   content,
-				Timestamp: time.Now(),
-			})
-		}
+	if reply != "" {
+		a.messages = append(a.messages, types.Message{
+			Role:      types.RoleAssistant,
+			Content:   reply,
+			Timestamp: time.Now(),
+		})
 	}
 	a.mu.Unlock()
 

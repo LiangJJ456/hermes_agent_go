@@ -34,6 +34,14 @@ func (e *Executor) Execute(ctx context.Context, g *orchestrator.Graph,
 	return e.executeFrom(ctx, g, g.StartAt, ec, 0)
 }
 
+// ExecuteWithContext runs a graph with a pre-built ExecutionContext.
+// This allows the caller to inject ConversationMemory (multi-turn history).
+func (e *Executor) ExecuteWithContext(ctx context.Context, g *orchestrator.Graph,
+	ec *agcontext.ExecutionContext) (interface{}, *orchestrator.ExecutionSnapshot, error) {
+
+	return e.executeFrom(ctx, g, g.StartAt, ec, 0)
+}
+
 // Resume continues execution from a saved snapshot after human input.
 func (e *Executor) Resume(ctx context.Context, g *orchestrator.Graph,
 	snap *orchestrator.ExecutionSnapshot, humanResponse interface{}) (interface{}, *orchestrator.ExecutionSnapshot, error) {
