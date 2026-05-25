@@ -606,8 +606,13 @@ func formatOutput(output interface{}) string {
 		return s
 	}
 	if m, ok := output.(map[string]interface{}); ok {
-		if content, ok := m["content"].(string); ok {
+		// 直接取 content（LLM 输出）
+		if content, ok := m["content"].(string); ok && content != "" {
 			return content
+		}
+		// 穿透 end 节点包装：{"Status":..., "Output": {原始输出}}
+		if inner, ok := m["Output"]; ok {
+			return formatOutput(inner)
 		}
 		if msg, ok := m["Message"].(string); ok && msg != "" {
 			return msg
