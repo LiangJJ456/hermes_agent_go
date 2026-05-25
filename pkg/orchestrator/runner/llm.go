@@ -22,9 +22,11 @@ type LLMConfig struct {
 
 // LLMMessage is a single message sent to the LLM.
 type LLMMessage struct {
-	Role    string `json:"Role"`
-	Content string `json:"Content"`
-	Name    string `json:"Name,omitempty"`
+	Role       string                   `json:"Role"`
+	Content    string                   `json:"Content"`
+	Name       string                   `json:"Name,omitempty"`
+	ToolCalls  []map[string]interface{} `json:"ToolCalls,omitempty"`
+	ToolCallID string                   `json:"ToolCallID,omitempty"`
 }
 
 // LLMInvoker abstracts the actual LLM call. hermes adapts model.Router to this.
@@ -71,7 +73,13 @@ func (r *LLMRunner) Run(ctx context.Context, node *orchestrator.NodeSpec,
 	if ec, ok := execCtx.(*agcontext.ExecutionContext); ok && ec.ConvMem != nil && len(ec.ConvMem.Messages) > 0 {
 		// Use full conversation history (system + all user/assistant turns)
 		for _, m := range ec.ConvMem.Messages {
-			messages = append(messages, LLMMessage{Role: m.Role, Content: m.Content, Name: m.Name})
+			messages = append(messages, LLMMessage{
+				Role:       m.Role,
+				Content:    m.Content,
+				Name:       m.Name,
+				ToolCalls:  m.ToolCalls,
+				ToolCallID: m.ToolCallID,
+			})
 		}
 	} else {
 		// Fallback: single-turn (backward compatible)
@@ -83,12 +91,38 @@ func (r *LLMRunner) Run(ctx context.Context, node *orchestrator.NodeSpec,
 	}
 
 	// Use streaming if OnStreamDelta callback is set
+	var result *orchestrator.NodeResult
+	var callErr error
 	if r.OnStreamDelta != nil {
-		return r.Invoker.ChatStream(ctx, cfg.Model, messages, cfg.Tools, cfg, func(delta string) {
+		result, callErr = r.Invoker.ChatStream(ctx, cfg.Model, messages, cfg.Tools, cfg, func(delta string) {
 			r.OnStreamDelta(ctx, delta)
 		})
+	} else {
+		result, callErr = r.Invoker.Chat(ctx, cfg.Model, messages, cfg.Tools, cfg)
 	}
-	return r.Invoker.Chat(ctx, cfg.Model, messages, cfg.Tools, cfg)
+	if callErr != nil {
+		return nil, callErr
+	}
+
+	// Append assistant message (with tool_calls) to ConvMem so the next LLM
+	// call in the graph loop sees the full history including this response.
+	if ec, ok := execCtx.(*agcontext.ExecutionContext); ok && ec.ConvMem != nil && result != nil {
+		if outMap, ok := result.Output.(map[string]interface{}); ok {
+			asstMsg := agcontext.Message{
+				Role:    "assistant",
+				Content: "",
+			}
+			if c, ok := outMap["content"].(string); ok {
+				asstMsg.Content = c
+			}
+			if tcs, ok := outMap["tool_calls"].([]map[string]interface{}); ok {
+				asstMsg.ToolCalls = tcs
+			}
+			ec.ConvMem.AddMessage(asstMsg)
+		}
+	}
+
+	return result, nil
 }
 
 func formatInput(input interface{}) string {

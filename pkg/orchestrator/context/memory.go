@@ -1,12 +1,17 @@
 package context
 
-import "context"
+import (
+	"context"
+	"sync"
+)
 
 // Message is a single conversation turn.
 type Message struct {
-	Role    string `json:"Role"`
-	Content string `json:"Content"`
-	Name    string `json:"Name,omitempty"`
+	Role       string                   `json:"Role"`
+	Content    string                   `json:"Content"`
+	Name       string                   `json:"Name,omitempty"`
+	ToolCalls  []map[string]interface{} `json:"ToolCalls,omitempty"`
+	ToolCallID string                   `json:"ToolCallID,omitempty"`
 }
 
 // ConversationMemory holds session-scoped message history.
@@ -14,11 +19,14 @@ type ConversationMemory struct {
 	SessionID string                 `json:"SessionID"`
 	Messages  []Message              `json:"Messages"`
 	Metadata  map[string]interface{} `json:"Metadata,omitempty"`
+	mu        sync.Mutex
 }
 
-// AddMessage appends a message to the conversation.
+// AddMessage appends a message to the conversation (thread-safe).
 func (cm *ConversationMemory) AddMessage(msg Message) {
+	cm.mu.Lock()
 	cm.Messages = append(cm.Messages, msg)
+	cm.mu.Unlock()
 }
 
 // MemoryStore persists conversation memory across sessions.

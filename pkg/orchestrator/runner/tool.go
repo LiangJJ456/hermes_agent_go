@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"code.byted.org/ad_creative/hermes_agent_go/pkg/orchestrator"
+	agcontext "code.byted.org/ad_creative/hermes_agent_go/pkg/orchestrator/context"
 )
 
 // ToolConfig configures a tool node.
@@ -51,6 +52,31 @@ func (r *ToolRunner) Run(ctx context.Context, node *orchestrator.NodeSpec,
 	result, err := r.Invoker.Invoke(ctx, cfg.Resource, input, cfg.Timeout)
 	if err != nil {
 		return nil, err
+	}
+
+	// Append tool result to ConvMem so the LLM sees tool output on the next call.
+	if ec, ok := execCtx.(*agcontext.ExecutionContext); ok && ec.ConvMem != nil {
+		toolCallID := ""
+		if inputMap, ok := input.(map[string]interface{}); ok {
+			if id, ok := inputMap["tool_call_id"].(string); ok {
+				toolCallID = id
+			}
+		}
+		resultContent := ""
+		if result.Output != nil {
+			if s, ok := result.Output.(string); ok {
+				resultContent = s
+			} else {
+				b, _ := json.Marshal(result.Output)
+				resultContent = string(b)
+			}
+		}
+		ec.ConvMem.AddMessage(agcontext.Message{
+			Role:       "tool",
+			Content:    resultContent,
+			Name:       cfg.Resource,
+			ToolCallID: toolCallID,
+		})
 	}
 
 	if cfg.Async && result.Status != orchestrator.StatusEnd {

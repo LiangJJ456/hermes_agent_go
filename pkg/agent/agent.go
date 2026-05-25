@@ -625,11 +625,27 @@ func formatOutput(output interface{}) string {
 func messagesToOrchMessages(msgs []types.Message) []orchcontext.Message {
 	result := make([]orchcontext.Message, len(msgs))
 	for i, m := range msgs {
-		result[i] = orchcontext.Message{
-			Role:    string(m.Role),
-			Content: m.Content,
-			Name:    m.Name,
+		msg := orchcontext.Message{
+			Role:       string(m.Role),
+			Content:    m.Content,
+			Name:       m.Name,
+			ToolCallID: m.ToolCallID,
 		}
+		if len(m.ToolCalls) > 0 {
+			tcs := make([]map[string]interface{}, len(m.ToolCalls))
+			for j, tc := range m.ToolCalls {
+				tcs[j] = map[string]interface{}{
+					"id":   tc.ID,
+					"type": tc.Type,
+					"function": map[string]interface{}{
+						"name":      tc.Function.Name,
+						"arguments": tc.Function.Arguments,
+					},
+				}
+			}
+			msg.ToolCalls = tcs
+		}
+		result[i] = msg
 	}
 	return result
 }

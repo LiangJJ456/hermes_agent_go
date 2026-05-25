@@ -63,11 +63,32 @@ func (a *RouterAdapter) call(ctx context.Context, modelName string,
 	// Convert runner.LLMMessage to types.Message
 	chatMsgs := make([]types.Message, 0, len(messages))
 	for _, m := range messages {
-		chatMsgs = append(chatMsgs, types.Message{
-			Role:    types.Role(m.Role),
-			Content: m.Content,
-			Name:    m.Name,
-		})
+		msg := types.Message{
+			Role:       types.Role(m.Role),
+			Content:    m.Content,
+			Name:       m.Name,
+			ToolCallID: m.ToolCallID,
+		}
+		// Convert []map[string]interface{} tool_calls to []types.ToolCall
+		for _, tc := range m.ToolCalls {
+			toolCall := types.ToolCall{}
+			if id, ok := tc["id"].(string); ok {
+				toolCall.ID = id
+			}
+			if tp, ok := tc["type"].(string); ok {
+				toolCall.Type = tp
+			}
+			if fn, ok := tc["function"].(map[string]interface{}); ok {
+				if name, ok := fn["name"].(string); ok {
+					toolCall.Function.Name = name
+				}
+				if args, ok := fn["arguments"].(string); ok {
+					toolCall.Function.Arguments = args
+				}
+			}
+			msg.ToolCalls = append(msg.ToolCalls, toolCall)
+		}
+		chatMsgs = append(chatMsgs, msg)
 	}
 
 	temp := cfg.Temperature
