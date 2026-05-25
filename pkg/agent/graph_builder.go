@@ -1,7 +1,10 @@
 package agent
 
 import (
+	"strings"
+
 	"code.byted.org/ad_creative/hermes_agent_go/pkg/orchestrator"
+	orchrunner "code.byted.org/ad_creative/hermes_agent_go/pkg/orchestrator/runner"
 	"code.byted.org/ad_creative/hermes_agent_go/pkg/types"
 )
 
@@ -28,7 +31,7 @@ const defaultGraphJSON = `{
     },
     "dispatch_tools": {
       "Type": "parallel",
-      "Config": {"Branches": "$dynamic_tool_branches"}
+      "Config": {"Branches": []}
     },
     "compress": {
       "Type": "tool",
@@ -52,12 +55,33 @@ const defaultGraphJSON = `{
 // (MaxIterations, Model, Temperature, MaxTokens) are used to override
 // defaults in the graph definition.
 func BuildDefaultGraph(cfg types.AgentConfig) (*orchestrator.Graph, error) {
-	g, err := orchestrator.UnmarshalGraph([]byte(defaultGraphJSON))
+	// 替换占位符
+	resolved := defaultGraphJSON
+	if cfg.Model != "" {
+		resolved = strings.ReplaceAll(resolved, "$model", cfg.Model)
+	}
+
+	g, err := orchestrator.UnmarshalGraph([]byte(resolved))
 	if err != nil {
 		return nil, err
 	}
 
-	g.MaxSteps = cfg.MaxIterations
+	// 覆盖 MaxSteps
+	if cfg.MaxIterations > 0 {
+		g.MaxSteps = cfg.MaxIterations
+	}
+
+	// 覆盖 LLM 节点参数
+	if llmNode, ok := g.Nodes["llm"]; ok {
+		if llmCfg, ok := llmNode.ParsedConfig.(*orchrunner.LLMConfig); ok {
+			if cfg.Temperature > 0 {
+				llmCfg.Temperature = cfg.Temperature
+			}
+			if cfg.MaxTokens > 0 {
+				llmCfg.MaxTokens = cfg.MaxTokens
+			}
+		}
+	}
 
 	return g, nil
 }
