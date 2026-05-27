@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"code.byted.org/ad_creative/hermes_agent_go/pkg/orchestrator"
 	agcontext "code.byted.org/ad_creative/hermes_agent_go/pkg/orchestrator/context"
@@ -52,7 +53,7 @@ func (r *ToolRunner) Run(ctx context.Context, node *orchestrator.NodeSpec,
 
 	// Write tool info to current span for tracing/event callbacks
 	if span := trace.SpanFromContext(ctx); span != nil {
-		span.SetAttribute("tool_name", cfg.Resource)
+		span.SetAttribute("tool_name", resource)
 		if input != nil {
 			if b, merr := json.Marshal(input); merr == nil {
 				span.SetAttribute("tool_args", string(b))
@@ -60,7 +61,13 @@ func (r *ToolRunner) Run(ctx context.Context, node *orchestrator.NodeSpec,
 		}
 	}
 
-	result, err := r.Invoker.Invoke(ctx, cfg.Resource, input, cfg.Timeout)
+	// Strip .waitForCallback suffix for actual invocation
+	resource := cfg.Resource
+	if strings.HasSuffix(resource, ".waitForCallback") {
+		resource = strings.TrimSuffix(resource, ".waitForCallback")
+	}
+
+	result, err := r.Invoker.Invoke(ctx, resource, input, cfg.Timeout)
 	if err != nil {
 		return nil, err
 	}
@@ -85,12 +92,14 @@ func (r *ToolRunner) Run(ctx context.Context, node *orchestrator.NodeSpec,
 		ec.ConvMem.AddMessage(agcontext.Message{
 			Role:       "tool",
 			Content:    resultContent,
-			Name:       cfg.Resource,
+			Name:       resource,
 			ToolCallID: toolCallID,
 		})
 	}
 
-	if cfg.Async && result.Status != orchestrator.StatusEnd {
+	// Async mode: explicit Async config OR resource suffix .waitForCallback
+	isAsync := cfg.Async || strings.HasSuffix(cfg.Resource, ".waitForCallback")
+	if isAsync && result.Status != orchestrator.StatusEnd {
 		result.Status = orchestrator.StatusPending
 		result.Interrupt = true
 	}
