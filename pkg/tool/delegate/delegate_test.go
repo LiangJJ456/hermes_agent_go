@@ -1,12 +1,15 @@
 package delegate
 
 import (
+	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
 	"time"
 
 	"code.byted.org/ad_creative/hermes_agent_go/pkg/agent"
+	"code.byted.org/ad_creative/hermes_agent_go/pkg/types"
 )
 
 func TestBuildFullTask_TaskOnly(t *testing.T) {
@@ -61,5 +64,60 @@ func TestBuildTaskNotification_Failed(t *testing.T) {
 	}
 	if !strings.Contains(xml, "timeout") {
 		t.Errorf("expected error in result:\n%s", xml)
+	}
+}
+
+func TestHandleAsync_ReturnsImmediately(t *testing.T) {
+	cfg := types.AgentConfig{
+		Model:                 "test/model",
+		WorkDir:               t.TempDir(),
+		MaxDelegateDepth:      2,
+		DelegateMaxIterations: 5,
+	}
+	parentAgent := agent.NewAIAgent(cfg, nil, nil)
+	p := NewProvider(parentAgent, 3)
+
+	args := json.RawMessage(`{"task": "analyze something"}`)
+
+	start := time.Now()
+	result, err := p.handleAsync(context.Background(), args)
+	elapsed := time.Since(start)
+
+	if err != nil {
+		t.Fatalf("handleAsync error: %v", err)
+	}
+	if elapsed > 500*time.Millisecond {
+		t.Errorf("handleAsync blocked for %v (expected < 500ms)", elapsed)
+	}
+	if !strings.Contains(result, "task-") {
+		t.Errorf("expected task ID in result, got: %s", result)
+	}
+	if !strings.Contains(result, "background") {
+		t.Errorf("expected 'background' in result, got: %s", result)
+	}
+}
+
+func TestHandleAsync_NotifiesParentOnCompletion(t *testing.T) {
+	cfg := types.AgentConfig{
+		Model:                 "test/model",
+		WorkDir:               t.TempDir(),
+		MaxDelegateDepth:      2,
+		DelegateMaxIterations: 3,
+	}
+	parentAgent := agent.NewAIAgent(cfg, nil, nil)
+	p := NewProvider(parentAgent, 3)
+
+	args := json.RawMessage(`{"task": "quick task"}`)
+	_, err := p.handleAsync(context.Background(), args)
+	if err != nil {
+		t.Fatalf("handleAsync error: %v", err)
+	}
+
+	// Child will fail fast (no LLM), but must still send a notification
+	select {
+	case <-parentAgent.NotifCh():
+		// success
+	case <-time.After(5 * time.Second):
+		t.Fatal("parent did not receive notification within 5s")
 	}
 }

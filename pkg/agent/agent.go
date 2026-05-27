@@ -585,9 +585,10 @@ func (a *AIAgent) NewChildAgent(task string) (*AIAgent, error) {
 
 	// 子 Agent 禁用的工具
 	childCfg.DisabledTools = append(append([]string{}, childCfg.DisabledTools...),
-		"delegate_task", // 防递归
-		"clarify",       // 无交互
-		"memory",        // 防共享写入
+		"delegate_task",       // 防递归
+		"delegate_task_async", // 防递归 (async variant)
+		"clarify",             // 无交互
+		"memory",              // 防共享写入
 	)
 
 	child := NewAIAgent(childCfg, a.router, a.registry)

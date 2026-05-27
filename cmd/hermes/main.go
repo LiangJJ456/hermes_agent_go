@@ -206,6 +206,9 @@ func main() {
 	if err := delegateProvider.Register(); err != nil {
 		fmt.Fprintf(os.Stderr, "⚠️  delegate_task register: %v\n", err)
 	}
+	if err := delegateProvider.RegisterAsync(); err != nil {
+		fmt.Fprintf(os.Stderr, "⚠️  delegate_task_async register: %v\n", err)
+	}
 
 	// ── 初始化 MCP 服务 ──
 	var mcpMgr *mcp.Manager
