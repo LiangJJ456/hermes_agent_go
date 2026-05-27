@@ -14,6 +14,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -292,11 +293,9 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-	go func() {
-		<-sigCh
-		fmt.Fprintf(os.Stderr, "\n🛑 Interrupted\n")
+	// doShutdown is idempotent: safe to call from the signal handler and /quit.
+	doShutdown := sync.OnceFunc(func() {
+		persistMessages(sessionDB, sessionID, ag)
 		if mcpMgr != nil {
 			mcpMgr.ShutdownAll()
 		}
@@ -304,6 +303,14 @@ func main() {
 		if sessionDB != nil {
 			sessionDB.Close()
 		}
+	})
+
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	go func() {
+		<-sigCh
+		fmt.Fprintf(os.Stderr, "\n🛑 Interrupted\n")
+		doShutdown()
 		cancel()
 	}()
 
@@ -334,7 +341,7 @@ func main() {
 				fmt.Print(">>> ")
 				continue
 			}
-			if handleReplCommand(input, ag, todoStore, mcpMgr, sessionDB, sessionID) {
+			if handleReplCommand(input, ag, todoStore, mcpMgr, doShutdown, cancel) {
 				fmt.Print(">>> ")
 				continue
 			}
@@ -363,31 +370,28 @@ func main() {
 				}
 			}
 			fmt.Print(">>> ")
+
+		case <-ctx.Done():
+			return
 		}
 	}
 }
 
 // handleReplCommand processes slash commands. Returns true if input was a command.
+// shutdown and cancel are called together for /quit so the select loop exits via ctx.Done().
 func handleReplCommand(
 	input string,
 	ag *agent.AIAgent,
 	todoStore *builtin.TodoStore,
 	mcpMgr *mcp.Manager,
-	sessionDB *state.SessionDB,
-	sessionID string,
+	shutdown func(),
+	cancel context.CancelFunc,
 ) bool {
 	switch input {
 	case "/quit", "/exit":
-		if mcpMgr != nil {
-			mcpMgr.ShutdownAll()
-		}
-		persistMessages(sessionDB, sessionID, ag)
-		ag.Shutdown()
-		if sessionDB != nil {
-			sessionDB.Close()
-		}
 		fmt.Println("👋 Bye!")
-		os.Exit(0)
+		shutdown()
+		cancel()
 	case "/stats":
 		stats := ag.GetStats()
 		fmt.Printf("  Iterations: %d | Tool calls: %d | Tokens: %d in / %d out\n",
