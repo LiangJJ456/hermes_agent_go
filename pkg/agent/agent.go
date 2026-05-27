@@ -81,6 +81,10 @@ type AIAgent struct {
 	// 事件回调
 	eventCB EventCallback
 
+	// 异步子 Agent 通知
+	pendingNotifs []string     // 子 agent 完成通知队列，受 mu 保护
+	notifCh       chan struct{} // 信号 channel，buffered(1)
+
 	// 规划系统
 	todoStore *builtin.TodoStore
 
@@ -135,6 +139,7 @@ func NewAIAgent(cfg types.AgentConfig, router *model.Router, reg *registry.Regis
 		promptBuilder: pb,
 		convMem:       &orchcontext.ConversationMemory{SessionID: cfg.SessionID},
 		stats:         Stats{StartTime: time.Now()},
+		notifCh:       make(chan struct{}, 1),
 	}
 
 	// Build adapters
@@ -362,14 +367,33 @@ func (a *AIAgent) Run(ctx context.Context, userInput string) (string, bool, erro
 		a.messages = []types.Message{sysMsg}
 	}
 
-	// Append user message
-	a.messages = append(a.messages, types.Message{
-		Role:      types.RoleUser,
-		Content:   userInput,
-		Timestamp: time.Now(),
-	})
-	a.turnNum++
+	// Drain pending async notifications, injecting each as a user message
+	notifsDrained := len(a.pendingNotifs)
+	for _, notif := range a.pendingNotifs {
+		a.messages = append(a.messages, types.Message{
+			Role:      types.RoleUser,
+			Content:   notif,
+			Timestamp: time.Now(),
+		})
+	}
+	a.pendingNotifs = nil
+
+	// Append real user message (only when non-empty)
+	if userInput != "" {
+		a.messages = append(a.messages, types.Message{
+			Role:      types.RoleUser,
+			Content:   userInput,
+			Timestamp: time.Now(),
+		})
+		a.turnNum++
+	}
 	a.mu.Unlock()
+
+	// Guard: nothing new to process — notifCh was signaled but notifications
+	// were already consumed by a concurrent Run call.
+	if userInput == "" && notifsDrained == 0 {
+		return "", false, nil
+	}
 
 	// PRE: memory prefetch — recall relevant memories and update system prompt
 	if a.memoryMgr != nil {
@@ -515,6 +539,22 @@ func (a *AIAgent) emitEvent(e Event) {
 		a.eventCB(e)
 	}
 }
+
+// AddNotification enqueues an async child-agent completion notification.
+// Safe to call from multiple goroutines.
+func (a *AIAgent) AddNotification(xml string) {
+	a.mu.Lock()
+	a.pendingNotifs = append(a.pendingNotifs, xml)
+	a.mu.Unlock()
+	select {
+	case a.notifCh <- struct{}{}:
+	default: // channel already has a pending signal; skip
+	}
+}
+
+// NotifCh returns a read-only channel that receives a signal whenever a new
+// async notification is enqueued. Consumers should call Run(ctx, "") to process it.
+func (a *AIAgent) NotifCh() <-chan struct{} { return a.notifCh }
 
 func truncateResult(s string, maxLen int) string {
 	if len(s) <= maxLen {

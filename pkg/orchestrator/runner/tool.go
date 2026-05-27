@@ -51,6 +51,12 @@ func (r *ToolRunner) Run(ctx context.Context, node *orchestrator.NodeSpec,
 		return nil, fmt.Errorf("tool runner: no invoker configured")
 	}
 
+	// Strip .waitForCallback suffix for actual invocation
+	resource := cfg.Resource
+	if strings.HasSuffix(resource, ".waitForCallback") {
+		resource = strings.TrimSuffix(resource, ".waitForCallback")
+	}
+
 	// Write tool info to current span for tracing/event callbacks
 	if span := trace.SpanFromContext(ctx); span != nil {
 		span.SetAttribute("tool_name", resource)
@@ -60,13 +66,6 @@ func (r *ToolRunner) Run(ctx context.Context, node *orchestrator.NodeSpec,
 			}
 		}
 	}
-
-	// Strip .waitForCallback suffix for actual invocation
-	resource := cfg.Resource
-	if strings.HasSuffix(resource, ".waitForCallback") {
-		resource = strings.TrimSuffix(resource, ".waitForCallback")
-	}
-
 	result, err := r.Invoker.Invoke(ctx, resource, input, cfg.Timeout)
 	if err != nil {
 		return nil, err
