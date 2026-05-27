@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"code.byted.org/ad_creative/hermes_agent_go/pkg/agent"
@@ -12,6 +13,10 @@ import (
 	"code.byted.org/ad_creative/hermes_agent_go/pkg/tool/registry"
 	"code.byted.org/ad_creative/hermes_agent_go/pkg/types"
 )
+
+// asyncTaskCounter makes task IDs unique even when multiple async delegates
+// are dispatched within the same millisecond (e.g. parallel tool calls).
+var asyncTaskCounter atomic.Uint64
 
 // delegateArgs delegate_task 工具参数
 type delegateArgs struct {
@@ -230,7 +235,7 @@ func (p *Provider) handleAsync(ctx context.Context, rawArgs json.RawMessage) (st
 		return "", fmt.Errorf("task description is required")
 	}
 
-	taskID := fmt.Sprintf("task-%d", time.Now().UnixMilli())
+	taskID := fmt.Sprintf("task-%d-%d", time.Now().UnixMilli(), asyncTaskCounter.Add(1))
 
 	child, err := p.parentAgent.NewChildAgent(args.Task)
 	if err != nil {
@@ -245,6 +250,8 @@ func (p *Provider) handleAsync(ctx context.Context, rawArgs json.RawMessage) (st
 		"depth", child.Depth(),
 	)
 
+	// context.Background() is intentional: the child must outlive the parent's
+	// turn context (which is cancelled when the tool call returns).
 	go func() {
 		start := time.Now()
 		var result string
@@ -322,7 +329,7 @@ Constraints:
 		Handler:       p.handleAsync,
 		ParallelSafe:  true,
 		NeverParallel: false,
-		MaxResultSize: 200,
+		MaxResultSize: 512,
 	})
 }
 
