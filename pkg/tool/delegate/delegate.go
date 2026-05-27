@@ -39,6 +39,43 @@ func NewProvider(parentAgent *agent.AIAgent, maxParallel int) *Provider {
 	}
 }
 
+// buildFullTask assembles the complete task prompt from delegate arguments.
+func buildFullTask(args delegateArgs) string {
+	fullTask := args.Task
+	if args.Context != "" {
+		fullTask += "\n\n## Context\n" + args.Context
+	}
+	if args.Constraints != "" {
+		fullTask += "\n\n## Constraints\n" + args.Constraints
+	}
+	return fullTask
+}
+
+// buildTaskNotification formats a completed (or failed) child-agent result as
+// an XML <task-notification> block that the parent LLM can parse.
+func buildTaskNotification(taskID, task, result string, err error, elapsed time.Duration, stats agent.Stats) string {
+	status := "completed"
+	if err != nil {
+		status = "failed"
+		result = err.Error()
+	}
+	return fmt.Sprintf(`<task-notification>
+<task-id>%s</task-id>
+<status>%s</status>
+<task>%s</task>
+<elapsed>%s</elapsed>
+<iterations>%d</iterations>
+<tool-calls>%d</tool-calls>
+<result>%s</result>
+</task-notification>`,
+		taskID, status, task,
+		elapsed.Round(time.Millisecond).String(),
+		stats.TotalIterations,
+		stats.ToolCalls,
+		result,
+	)
+}
+
 // Register 注册 delegate_task 工具到全局 Registry
 func (p *Provider) Register() error {
 	schema := types.ToolSchema{
@@ -109,14 +146,7 @@ func (p *Provider) handle(ctx context.Context, rawArgs json.RawMessage) (string,
 		return "", fmt.Errorf("create child agent: %w", err)
 	}
 
-	// 组装完整的任务描述
-	fullTask := args.Task
-	if args.Context != "" {
-		fullTask += "\n\n## Context\n" + args.Context
-	}
-	if args.Constraints != "" {
-		fullTask += "\n\n## Constraints\n" + args.Constraints
-	}
+	fullTask := buildFullTask(args)
 
 	log.Info("delegating task to child agent",
 		"task_preview", truncate(args.Task, 100),
