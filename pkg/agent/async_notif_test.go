@@ -90,7 +90,13 @@ func TestRun_DrainsPendingNotificationsAsMessages(t *testing.T) {
 	notif := "<task-notification><task-id>abc</task-id><status>completed</status><result>done</result></task-notification>"
 	a.pendingNotifs = []string{notif}
 
-	a.Run(context.Background(), "")
+	reply, _, err := a.Run(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Run() error: %v", err)
+	}
+	if reply == "" {
+		t.Error("expected non-empty reply when draining notifications")
+	}
 
 	a.mu.Lock()
 	msgs := make([]types.Message, len(a.messages))

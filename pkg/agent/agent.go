@@ -378,6 +378,13 @@ func (a *AIAgent) Run(ctx context.Context, userInput string) (string, bool, erro
 	}
 	a.pendingNotifs = nil
 
+	// Drain any stale signal that was sent after we captured pendingNotifs.
+	// This prevents a spurious REPL wake-up from blocking a subsequent real notification.
+	select {
+	case <-a.notifCh:
+	default:
+	}
+
 	// Append real user message (only when non-empty)
 	if userInput != "" {
 		a.messages = append(a.messages, types.Message{
