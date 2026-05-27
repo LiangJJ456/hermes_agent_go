@@ -313,77 +313,111 @@ func main() {
 	fmt.Printf("   Session: %s\n", sessionID)
 	fmt.Printf("   Memory: %s/memories\n\n", hermesHome)
 
-	scanner := bufio.NewScanner(os.Stdin)
+	stdinCh := make(chan string, 1)
+	go func() {
+		scanner := bufio.NewScanner(os.Stdin)
+		for scanner.Scan() {
+			stdinCh <- scanner.Text()
+		}
+		close(stdinCh)
+	}()
+
+	fmt.Print(">>> ")
 	for {
-		fmt.Print(">>> ")
-		if !scanner.Scan() {
-			break
-		}
-		input := strings.TrimSpace(scanner.Text())
-		if input == "" {
-			continue
-		}
-		if input == "/quit" || input == "/exit" {
-			if mcpMgr != nil {
-				mcpMgr.ShutdownAll()
+		select {
+		case line, ok := <-stdinCh:
+			if !ok {
+				return // stdin closed
 			}
-			persistMessages(sessionDB, sessionID, ag)
-			ag.Shutdown()
-			if sessionDB != nil {
-				sessionDB.Close()
+			input := strings.TrimSpace(line)
+			if input == "" {
+				fmt.Print(">>> ")
+				continue
 			}
-			fmt.Println("👋 Bye!")
-			break
-		}
-		if input == "/stats" {
-			stats := ag.GetStats()
-			fmt.Printf("  Iterations: %d | Tool calls: %d | Tokens: %d in / %d out\n",
-				stats.TotalIterations, stats.ToolCalls, stats.InputTokens, stats.OutputTokens)
-			continue
-		}
-		if input == "/budget" {
-			fmt.Println("  Budget tracking: managed by graph executor (MaxSteps = cfg.MaxIterations)")
-			continue
-		}
-		if input == "/todo" {
-			items := todoStore.Read()
-			if len(items) == 0 {
-				fmt.Println("  (no TODO list)")
+			if handleReplCommand(input, ag, todoStore, mcpMgr, sessionDB, sessionID) {
+				fmt.Print(">>> ")
+				continue
+			}
+
+			streamedThisTurn = false
+			reply, _, err := ag.Run(ctx, input)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "\n❌ Error: %v\n", err)
+			} else if !streamedThisTurn && reply != "" {
+				fmt.Println(reply)
 			} else {
-				fmt.Println(todoStore.Summary())
+				fmt.Println()
 			}
-			continue
-		}
-		if input == "/mcp" {
-			if mcpMgr == nil {
-				fmt.Println("  No MCP servers configured")
-			} else {
-				for _, s := range mcpMgr.GetStatus() {
-					st := "ready"
-					if s.Error != "" {
-						st = "error: " + s.Error
-					}
-					fmt.Printf("  [%s] %s (%s) — %d tools\n",
-						s.Transport, s.Name, st, len(s.Tools))
+			fmt.Print(">>> ")
+
+		case <-ag.NotifCh():
+			streamedThisTurn = false
+			reply, _, err := ag.Run(ctx, "")
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "\n[async] ❌ %v\n", err)
+			} else if reply != "" {
+				if !streamedThisTurn {
+					fmt.Printf("\n[async] %s\n", reply)
+				} else {
+					fmt.Println()
 				}
 			}
-			continue
-		}
-
-		streamedThisTurn = false
-		reply, _, err := ag.Run(ctx, input)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "\n❌ Error: %v\n", err)
-			continue
-		}
-		// Stream deltas are already printed via EventStreamDelta callback.
-		// Only print reply if it wasn't streamed (i.e., no streaming callback fired).
-		if !streamedThisTurn && reply != "" {
-			fmt.Println(reply)
-		} else {
-			fmt.Println() // newline after streamed output
+			fmt.Print(">>> ")
 		}
 	}
+}
+
+// handleReplCommand processes slash commands. Returns true if input was a command.
+func handleReplCommand(
+	input string,
+	ag *agent.AIAgent,
+	todoStore *builtin.TodoStore,
+	mcpMgr *mcp.Manager,
+	sessionDB *state.SessionDB,
+	sessionID string,
+) bool {
+	switch input {
+	case "/quit", "/exit":
+		if mcpMgr != nil {
+			mcpMgr.ShutdownAll()
+		}
+		persistMessages(sessionDB, sessionID, ag)
+		ag.Shutdown()
+		if sessionDB != nil {
+			sessionDB.Close()
+		}
+		fmt.Println("👋 Bye!")
+		os.Exit(0)
+	case "/stats":
+		stats := ag.GetStats()
+		fmt.Printf("  Iterations: %d | Tool calls: %d | Tokens: %d in / %d out\n",
+			stats.TotalIterations, stats.ToolCalls, stats.InputTokens, stats.OutputTokens)
+	case "/budget":
+		fmt.Println("  Budget tracking: managed by graph executor (MaxSteps = cfg.MaxIterations)")
+	case "/todo":
+		items := todoStore.Read()
+		if len(items) == 0 {
+			fmt.Println("  (no TODO list)")
+		} else {
+			fmt.Println(todoStore.Summary())
+		}
+	case "/mcp":
+		if mcpMgr == nil {
+			fmt.Println("  No MCP servers configured")
+		} else {
+			for _, s := range mcpMgr.GetStatus() {
+				st := "ready"
+				if s.Error != "" {
+					st = "error: " + s.Error
+				}
+				fmt.Printf("  [%s] %s (%s) — %d tools\n",
+					s.Transport, s.Name, st, len(s.Tools))
+			}
+		}
+	default:
+		return false
+	}
+	return true
 }
 
 // persistMessages 持久化消息历史到 SessionDB
