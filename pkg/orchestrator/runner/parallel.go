@@ -16,14 +16,7 @@ type ParallelConfig struct {
 }
 
 // ParallelRunner executes multiple branches concurrently.
-type ParallelRunner struct {
-	Executor GraphExecutor
-}
-
-// SetExecutor sets the graph executor.
-func (r *ParallelRunner) SetExecutor(exec GraphExecutor) {
-	r.Executor = exec
-}
+type ParallelRunner struct{}
 
 func (r *ParallelRunner) Run(ctx context.Context, node *orchestrator.NodeSpec,
 	input interface{}, execCtx interface{}) (*orchestrator.NodeResult, error) {
@@ -37,9 +30,11 @@ func (r *ParallelRunner) Run(ctx context.Context, node *orchestrator.NodeSpec,
 		json.Unmarshal(node.Config, &cfg)
 	}
 
-	if r.Executor == nil {
+	ec, _ := execCtx.(*agcontext.ExecutionContext)
+	if ec == nil || ec.Executor == nil {
 		return nil, fmt.Errorf("parallel runner: no executor configured")
 	}
+	exec := ec.Executor
 
 	// Dynamic tool dispatch: if branches are empty and input has tool_calls,
 	// build one tool branch per tool_call automatically.
@@ -64,7 +59,7 @@ func (r *ParallelRunner) Run(ctx context.Context, node *orchestrator.NodeSpec,
 		wg.Add(1)
 		go func(idx int, g *orchestrator.Graph) {
 			defer wg.Done()
-			out, _, err := r.Executor.Execute(ctx, g, input)
+			out, _, err := exec.Execute(ctx, g, input)
 			if err != nil {
 				mu.Lock()
 				if firstErr == nil {
@@ -98,14 +93,18 @@ func (r *ParallelRunner) dispatchToolCalls(ctx context.Context,
 	var firstErr error
 	var mu sync.Mutex
 
-	// Get the ConvMem-aware executor if available
-	ctxExec, hasCtxExec := r.Executor.(ContextGraphExecutor)
-
 	// Get parent ExecutionContext for ConvMem access
 	var parentEC *agcontext.ExecutionContext
 	if ec, ok := execCtx.(*agcontext.ExecutionContext); ok {
 		parentEC = ec
 	}
+
+	// Get the ConvMem-aware executor if available
+	var exec GraphExecutor
+	if ec, ok := execCtx.(*agcontext.ExecutionContext); ok {
+		exec = ec.Executor
+	}
+	ctxExec, hasCtxExec := exec.(ContextGraphExecutor)
 
 	for i, tc := range toolCalls {
 		wg.Add(1)
@@ -171,7 +170,7 @@ func (r *ParallelRunner) dispatchToolCalls(ctx context.Context,
 				}
 				out, _, err = ctxExec.ExecuteWithContext(ctx, subGraph, childEC)
 			} else {
-				out, _, err = r.Executor.Execute(ctx, subGraph, toolInput)
+				out, _, err = exec.Execute(ctx, subGraph, toolInput)
 			}
 
 			if err != nil {

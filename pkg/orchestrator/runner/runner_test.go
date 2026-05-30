@@ -119,7 +119,8 @@ func TestParallelRunnerNoExecutor(t *testing.T) {
 	node := &orchestrator.NodeSpec{
 		Config: json.RawMessage(`{"Branches":[]}`),
 	}
-	_, err := r.Run(context.Background(), node, nil, nil)
+	ec := agcontext.NewExecutionContext(nil) // no Executor set
+	_, err := r.Run(context.Background(), node, nil, ec)
 	if err == nil {
 		t.Fatal("expected error for missing executor")
 	}

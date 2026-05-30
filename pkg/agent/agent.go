@@ -18,7 +18,6 @@ import (
 	"code.byted.org/ad_creative/hermes_agent_go/pkg/orchestrator"
 	orchcontext "code.byted.org/ad_creative/hermes_agent_go/pkg/orchestrator/context"
 	orchexec "code.byted.org/ad_creative/hermes_agent_go/pkg/orchestrator/executor"
-	orchrunner "code.byted.org/ad_creative/hermes_agent_go/pkg/orchestrator/runner"
 	"code.byted.org/ad_creative/hermes_agent_go/pkg/tool/builtin"
 	"code.byted.org/ad_creative/hermes_agent_go/pkg/tool/registry"
 	"code.byted.org/ad_creative/hermes_agent_go/pkg/trace"
@@ -180,11 +179,6 @@ func NewAIAgent(cfg types.AgentConfig, router *model.Router, reg *registry.Regis
 // per-agent state on the global runner — pass the invoker/tracer through the
 // per-execution ExecutionContext into Run instead.
 func (a *AIAgent) wireRunners() {
-	if entry, ok := orchestrator.LookupNodeType("parallel"); ok {
-		if r, ok := entry.Runner.(*orchrunner.ParallelRunner); ok {
-			r.SetExecutor(a.executor)
-		}
-	}
 }
 
 // SetEventCallback 设置事件回调
