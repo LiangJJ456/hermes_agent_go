@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
+
+	"code.byted.org/ad_creative/hermes_agent_go/pkg/orchestrator/condition"
 )
 
 // UnmarshalGraph loads a Graph from JSON bytes with two-phase parsing:
@@ -44,6 +46,15 @@ func UnmarshalGraph(data []byte) (*Graph, error) {
 		g.Nodes[name] = node
 	}
 
+	for i, e := range g.Edges {
+		if e.Condition == "" {
+			continue
+		}
+		if err := condition.Validate(e.Condition); err != nil {
+			return nil, fmt.Errorf("edge %d (%s->%s): %w", i, e.From, e.To, err)
+		}
+	}
+
 	return g, nil
 }
 
@@ -78,6 +89,11 @@ func unmarshalNode(raw json.RawMessage) (*NodeSpec, error) {
 			return nil, fmt.Errorf("unmarshal config for type %q: %w", typeCheck.Type, err)
 		}
 		node.ParsedConfig = cfgPtr
+		if v, ok := cfgPtr.(interface{ Validate() error }); ok {
+			if err := v.Validate(); err != nil {
+				return nil, fmt.Errorf("validate config for type %q: %w", typeCheck.Type, err)
+			}
+		}
 	}
 
 	return &node, nil
