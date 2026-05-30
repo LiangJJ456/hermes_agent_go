@@ -166,6 +166,16 @@ func NewAIAgent(cfg types.AgentConfig, router *model.Router, reg *registry.Regis
 }
 
 // wireRunners connects adapters to orchestrator runners.
+//
+// TODO(tech-debt): the LLM/Tool/Parallel runners are process-global singletons
+// (registered once via orchestrator.RegisterNodeType). wireRunners mutates their
+// Invoker / OnToolStart / Executor per agent, so the LAST agent to call this wins
+// globally. After a delegation the global ToolRunner.Invoker is left pointing at
+// the child's invoker (which has memory/delegate tools disabled), and concurrent
+// async delegation races on these shared fields. The display side is patched
+// (child events forward to the parent), but the proper fix is to stop storing
+// per-agent state on the global runner — pass the invoker/tracer through the
+// per-execution ExecutionContext into Run instead.
 func (a *AIAgent) wireRunners() {
 	if entry, ok := orchestrator.LookupNodeType("llm"); ok {
 		if r, ok := entry.Runner.(*orchrunner.LLMRunner); ok {
