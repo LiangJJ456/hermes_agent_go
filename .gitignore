@@ -19,3 +19,6 @@ palace/
 
 # Superpowers brainstorming artifacts
 .superpowers/
+
+# Claude Code
+.claude/
