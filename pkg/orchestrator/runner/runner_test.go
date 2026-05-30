@@ -46,7 +46,7 @@ func TestChoiceRunnerDefault(t *testing.T) {
 func TestChoiceRunnerMatch(t *testing.T) {
 	r := &ChoiceRunner{}
 	node := &orchestrator.NodeSpec{
-		Config: json.RawMessage(`{"Choices":[{"Condition":{"has_tool_calls":true},"Next":"tools"}],"Default":"end"}`),
+		Config: json.RawMessage(`{"Choices":[{"Condition":"input.has_tool_calls == true","Next":"tools"}],"Default":"end"}`),
 	}
 	input := map[string]interface{}{"has_tool_calls": true}
 	result, err := r.Run(context.Background(), node, input, nil)
@@ -61,7 +61,7 @@ func TestChoiceRunnerMatch(t *testing.T) {
 func TestChoiceRunnerNoMatch(t *testing.T) {
 	r := &ChoiceRunner{}
 	node := &orchestrator.NodeSpec{
-		Config: json.RawMessage(`{"Choices":[{"Condition":{"has_tool_calls":true},"Next":"tools"}],"Default":"end"}`),
+		Config: json.RawMessage(`{"Choices":[{"Condition":"input.has_tool_calls == true","Next":"tools"}],"Default":"end"}`),
 	}
 	input := map[string]interface{}{"has_tool_calls": false}
 	result, err := r.Run(context.Background(), node, input, nil)
@@ -70,6 +70,21 @@ func TestChoiceRunnerNoMatch(t *testing.T) {
 	}
 	if result.Next != "end" {
 		t.Fatalf("expected default next 'end', got %q", result.Next)
+	}
+}
+
+func TestChoiceRunnerNumericMatch(t *testing.T) {
+	r := &ChoiceRunner{}
+	node := &orchestrator.NodeSpec{
+		Config: json.RawMessage(`{"Choices":[{"Condition":"input.count == 3","Next":"hit"}],"Default":"end"}`),
+	}
+	input := map[string]interface{}{"count": 3} // Go int vs literal 3 (float64)
+	result, err := r.Run(context.Background(), node, input, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Next != "hit" {
+		t.Fatalf("expected next 'hit', got %q", result.Next)
 	}
 }
 

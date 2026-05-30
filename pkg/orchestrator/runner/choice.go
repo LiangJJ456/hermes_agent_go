@@ -6,6 +6,8 @@ import (
 	"fmt"
 
 	"code.byted.org/ad_creative/hermes_agent_go/pkg/orchestrator"
+	"code.byted.org/ad_creative/hermes_agent_go/pkg/orchestrator/condition"
+	agcontext "code.byted.org/ad_creative/hermes_agent_go/pkg/orchestrator/context"
 )
 
 // ChoiceConfig configures a choice (branch) node.
@@ -14,10 +16,24 @@ type ChoiceConfig struct {
 	Default string        `json:"Default,omitempty"`
 }
 
-// ChoiceEntry is a single branch condition.
+// ChoiceEntry is a single branch. Condition is a string expression evaluated
+// against the choice node's input; an empty Condition always matches.
 type ChoiceEntry struct {
-	Next      string          `json:"Next"`
-	Condition json.RawMessage `json:"Condition,omitempty"`
+	Next      string `json:"Next"`
+	Condition string `json:"Condition,omitempty"`
+}
+
+// Validate checks every choice condition at graph-load time.
+func (c *ChoiceConfig) Validate() error {
+	for _, ch := range c.Choices {
+		if ch.Condition == "" {
+			continue
+		}
+		if err := condition.Validate(ch.Condition); err != nil {
+			return fmt.Errorf("choice -> %q: %w", ch.Next, err)
+		}
+	}
+	return nil
 }
 
 // ChoiceRunner evaluates conditions and routes to the matching branch.
@@ -35,11 +51,19 @@ func (r *ChoiceRunner) Run(ctx context.Context, node *orchestrator.NodeSpec,
 		json.Unmarshal(node.Config, &cfg)
 	}
 
+	scope := condition.Scope{Input: input}
+	if ec, ok := execCtx.(*agcontext.ExecutionContext); ok && ec.WorkMem != nil {
+		scope.State = ec.WorkMem.State
+	}
+
 	for _, ch := range cfg.Choices {
-		if len(ch.Condition) == 0 {
+		if ch.Condition == "" {
 			return &orchestrator.NodeResult{Status: orchestrator.StatusContinue, Next: ch.Next, Output: input}, nil
 		}
-		matched := evaluateCondition(ch.Condition, input)
+		matched, err := condition.Evaluate(ch.Condition, scope)
+		if err != nil {
+			return nil, fmt.Errorf("choice condition %q: %w", ch.Condition, err)
+		}
 		if matched {
 			return &orchestrator.NodeResult{Status: orchestrator.StatusContinue, Next: ch.Next, Output: input}, nil
 		}
@@ -50,28 +74,6 @@ func (r *ChoiceRunner) Run(ctx context.Context, node *orchestrator.NodeSpec,
 	}
 
 	return nil, fmt.Errorf("no choice matched and no default")
-}
-
-// evaluateCondition checks if input matches the condition.
-func evaluateCondition(cond json.RawMessage, input interface{}) bool {
-	var condMap map[string]interface{}
-	if err := json.Unmarshal(cond, &condMap); err != nil {
-		return false
-	}
-	inputMap, ok := input.(map[string]interface{})
-	if !ok {
-		return false
-	}
-	for key, expectedVal := range condMap {
-		actualVal, exists := inputMap[key]
-		if !exists {
-			return false
-		}
-		if actualVal != expectedVal {
-			return false
-		}
-	}
-	return true
 }
 
 func init() {
