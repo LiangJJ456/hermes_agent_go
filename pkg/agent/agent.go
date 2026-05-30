@@ -615,16 +615,10 @@ func (a *AIAgent) NewChildAgent(task string) (*AIAgent, error) {
 	child.todoStore = a.todoStore // 子 agent 共享 TODO 状态
 	child.skillMgr = a.skillMgr   // 共享发现后端；激活集合各自独立（activeSkills 默认空）
 
-	// 子 Agent 继承父 Agent 的事件回调（带前缀）
-	// 使用 mu 保护回调，防止多个并发子 Agent 同时调用 eventCB 导致 race
-	if a.eventCB != nil {
-		child.SetEventCallback(func(e Event) {
-			e.Content = fmt.Sprintf("[child-agent] %s", e.Content)
-			a.mu.Lock()
-			a.eventCB(e)
-			a.mu.Unlock()
-		})
-	}
+	// 子 Agent 静默运行：不向用户终端转发事件。子 agent 的流式 token 若直接
+	// 打印会与父 agent（以及 parallel/async 下的兄弟子 agent）的输出逐字交错。
+	// 只有顶层 agent 流式输出；子 agent 的结果通过 delegate 工具的返回值回到父 agent，
+	// 由父 agent 流式它的总结。
 
 	return child, nil
 }

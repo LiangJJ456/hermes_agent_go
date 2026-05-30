@@ -11,12 +11,16 @@ import (
 )
 
 var (
-	logger *slog.Logger
-	once   sync.Once
+	logger   *slog.Logger
+	levelVar = new(slog.LevelVar) // dynamic level (zero value = LevelInfo)
+	once     sync.Once
 )
 
-// Init 初始化日志，logDir 为空则仅输出 stderr
+// Init 初始化日志，logDir 为空则仅输出 stderr。
+// level 通过 levelVar 应用：即使 logger 已被更早的(惰性)Init 构造，本次设置的
+// level 仍会立即生效，因此不受包 init 顺序影响（避免某个 init 先以 Info 锁死级别）。
 func Init(logDir string, level slog.Level) {
+	levelVar.Set(level)
 	once.Do(func() {
 		var w io.Writer = os.Stderr
 		if logDir != "" {
@@ -29,7 +33,7 @@ func Init(logDir string, level slog.Level) {
 				w = io.MultiWriter(os.Stderr, f)
 			}
 		}
-		logger = slog.New(slog.NewJSONHandler(w, &slog.HandlerOptions{Level: level}))
+		logger = slog.New(slog.NewJSONHandler(w, &slog.HandlerOptions{Level: levelVar}))
 		slog.SetDefault(logger)
 	})
 }

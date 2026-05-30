@@ -38,8 +38,9 @@ import (
 )
 
 func main() {
-	// 日志级别
-	logLevel := slog.LevelInfo
+	// 日志级别：默认 Warn，避免 span.end / 子 agent 等 INFO 日志刷屏与流式输出混杂。
+	// 设 HERMES_DEBUG=1 可看到完整 Debug 日志。
+	logLevel := slog.LevelWarn
 	if os.Getenv("HERMES_DEBUG") == "1" {
 		logLevel = slog.LevelDebug
 	}

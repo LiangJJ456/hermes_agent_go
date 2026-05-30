@@ -101,3 +101,23 @@ func TestNewAIAgent_OKWithDefaultGraph(t *testing.T) {
 		t.Fatalf("expected no error with default graph, got %v", err)
 	}
 }
+
+func TestNewChildAgent_RunsSilently(t *testing.T) {
+	// Child agents must not stream to the user terminal: their token output
+	// would interleave with the parent's (and with sibling sub-agents under a
+	// parallel dispatch). Only the top-level agent streams; child results flow
+	// back as the delegate tool's return value.
+	parent, err := NewAIAgent(types.AgentConfig{MaxDelegateDepth: 2}, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parent.SetEventCallback(func(Event) {})
+
+	child, err := parent.NewChildAgent("do something")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if child.eventCB != nil {
+		t.Fatal("expected child agent to run silently (no event callback), but one was set")
+	}
+}
