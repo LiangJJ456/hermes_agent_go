@@ -29,6 +29,9 @@ func (e *dslEvaluator) Evaluate(expr string, scope Scope) (bool, error) {
 	}
 	b, ok := v.(bool)
 	if !ok {
+		if v == undefined {
+			return false, nil
+		}
 		return false, fmt.Errorf("condition %q did not evaluate to bool (got %T)", expr, v)
 	}
 	return b, nil
@@ -46,11 +49,45 @@ func (e *dslEvaluator) Validate(expr string) error {
 // (bool, float64, string, or undefined).
 func evalNode(n ast.Expr, scope Scope) (interface{}, error) {
 	switch node := n.(type) {
+	case *ast.ParenExpr:
+		return evalNode(node.X, scope)
 	case *ast.Ident:
 		return evalIdent(node, scope)
+	case *ast.SelectorExpr:
+		return evalSelector(node, scope)
 	default:
 		return nil, fmt.Errorf("unsupported expression: %T", n)
 	}
+}
+
+func evalSelector(node *ast.SelectorExpr, scope Scope) (interface{}, error) {
+	base, err := evalNode(node.X, scope)
+	if err != nil {
+		return nil, err
+	}
+	m, ok := toStringMap(base)
+	if !ok {
+		return undefined, nil
+	}
+	v, ok := m[node.Sel.Name]
+	if !ok {
+		return undefined, nil
+	}
+	return v, nil
+}
+
+func toStringMap(v interface{}) (map[string]interface{}, bool) {
+	m, ok := v.(map[string]interface{})
+	return m, ok
+}
+
+// truthy interprets a value in boolean context: real bools pass through,
+// everything else (including undefined) is false.
+func truthy(v interface{}) bool {
+	if b, ok := v.(bool); ok {
+		return b
+	}
+	return false
 }
 
 func evalIdent(node *ast.Ident, scope Scope) (interface{}, error) {
