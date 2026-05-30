@@ -16,12 +16,12 @@ import (
 	"code.byted.org/ad_creative/hermes_agent_go/pkg/log"
 	"code.byted.org/ad_creative/hermes_agent_go/pkg/model"
 	"code.byted.org/ad_creative/hermes_agent_go/pkg/orchestrator"
-	"code.byted.org/ad_creative/hermes_agent_go/pkg/trace"
 	orchcontext "code.byted.org/ad_creative/hermes_agent_go/pkg/orchestrator/context"
 	orchexec "code.byted.org/ad_creative/hermes_agent_go/pkg/orchestrator/executor"
 	orchrunner "code.byted.org/ad_creative/hermes_agent_go/pkg/orchestrator/runner"
 	"code.byted.org/ad_creative/hermes_agent_go/pkg/tool/builtin"
 	"code.byted.org/ad_creative/hermes_agent_go/pkg/tool/registry"
+	"code.byted.org/ad_creative/hermes_agent_go/pkg/trace"
 	"code.byted.org/ad_creative/hermes_agent_go/pkg/types"
 )
 
@@ -29,13 +29,13 @@ import (
 type EventType int
 
 const (
-	EventToolStart    EventType = iota // 工具开始执行
-	EventToolEnd                       // 工具执行完成
-	EventStreamDelta                   // 流式增量
-	EventCompression                   // 上下文压缩触发
-	EventBudgetWarn                    // 预算即将耗尽
-	EventMemory                        // 记忆操作
-	EventError                         // 错误
+	EventToolStart   EventType = iota // 工具开始执行
+	EventToolEnd                      // 工具执行完成
+	EventStreamDelta                  // 流式增量
+	EventCompression                  // 上下文压缩触发
+	EventBudgetWarn                   // 预算即将耗尽
+	EventMemory                       // 记忆操作
+	EventError                        // 错误
 )
 
 // Event Agent 运行事件
@@ -83,7 +83,7 @@ type AIAgent struct {
 	eventCB EventCallback
 
 	// 异步子 Agent 通知
-	pendingNotifs []string     // 子 agent 完成通知队列，受 mu 保护
+	pendingNotifs []string      // 子 agent 完成通知队列，受 mu 保护
 	notifCh       chan struct{} // 信号 channel，buffered(1)
 
 	// 规划系统
@@ -109,7 +109,7 @@ type Stats struct {
 }
 
 // NewAIAgent 创建 Agent
-func NewAIAgent(cfg types.AgentConfig, router *model.Router, reg *registry.Registry) *AIAgent {
+func NewAIAgent(cfg types.AgentConfig, router *model.Router, reg *registry.Registry) (*AIAgent, error) {
 	workDir := cfg.WorkDir
 	if workDir == "" {
 		workDir = "."
@@ -117,12 +117,15 @@ func NewAIAgent(cfg types.AgentConfig, router *model.Router, reg *registry.Regis
 
 	pb := prompt.NewBuilder(cfg.Platform, cfg.Model, workDir)
 
-	// Build default graph
-	var graph *orchestrator.Graph
-	var err error
-	graph, err = BuildGraph(cfg)
+	graph, err := BuildGraph(cfg)
 	if err != nil {
-		// Fallback: minimal graph
+		// A custom graph was explicitly requested but failed to load: fail loud
+		// rather than silently degrade to a do-nothing graph.
+		if cfg.GraphPath != "" {
+			return nil, fmt.Errorf("load custom graph %q: %w", cfg.GraphPath, err)
+		}
+		// The built-in default graph failed to build (should not happen):
+		// fall back defensively to a minimal graph.
 		graph = &orchestrator.Graph{
 			StartAt: "end",
 			Nodes: map[string]*orchestrator.NodeSpec{
@@ -158,7 +161,7 @@ func NewAIAgent(cfg types.AgentConfig, router *model.Router, reg *registry.Regis
 	// Wire invokers to runners
 	a.wireRunners()
 
-	return a
+	return a, nil
 }
 
 // wireRunners connects adapters to orchestrator runners.
@@ -603,7 +606,10 @@ func (a *AIAgent) NewChildAgent(task string) (*AIAgent, error) {
 		"memory",              // 防共享写入
 	)
 
-	child := NewAIAgent(childCfg, a.router, a.registry)
+	child, err := NewAIAgent(childCfg, a.router, a.registry)
+	if err != nil {
+		return nil, fmt.Errorf("create child agent: %w", err)
+	}
 	child.depth = a.depth + 1
 	child.isChild = true
 	child.todoStore = a.todoStore // 子 agent 共享 TODO 状态

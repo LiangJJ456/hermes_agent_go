@@ -81,3 +81,23 @@ func TestBuildGraph_RejectsInvalidConditionInCustomGraph(t *testing.T) {
 		t.Fatal("expected error for invalid condition in custom graph, got nil")
 	}
 }
+
+func TestNewAIAgent_FailsLoudOnBadCustomGraph(t *testing.T) {
+	// An explicitly-requested custom graph that fails to load must surface as
+	// an error, not silently fall back to the minimal graph.
+	bad := `{"StartAt":"a","Nodes":{"a":{"Type":"end"}},"Edges":[{"From":"a","To":"a","Condition":"input.x + 1"}]}`
+	path := filepath.Join(t.TempDir(), "bad.json")
+	if err := os.WriteFile(path, []byte(bad), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewAIAgent(types.AgentConfig{GraphPath: path}, nil, nil); err == nil {
+		t.Fatal("expected NewAIAgent to fail on invalid custom graph, got nil")
+	}
+}
+
+func TestNewAIAgent_OKWithDefaultGraph(t *testing.T) {
+	// No custom graph requested: construction must succeed with the default graph.
+	if _, err := NewAIAgent(types.AgentConfig{}, nil, nil); err != nil {
+		t.Fatalf("expected no error with default graph, got %v", err)
+	}
+}

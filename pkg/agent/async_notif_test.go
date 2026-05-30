@@ -58,7 +58,10 @@ func TestNotifCh_ReturnsReadOnly(t *testing.T) {
 
 func TestRun_GuardEmptyInputNoPendingNotifs(t *testing.T) {
 	cfg := types.AgentConfig{Model: "test/model", WorkDir: t.TempDir(), MaxDelegateDepth: 2}
-	a := NewAIAgent(cfg, nil, nil)
+	a, err := NewAIAgent(cfg, nil, nil)
+	if err != nil {
+		t.Fatalf("NewAIAgent: %v", err)
+	}
 	// Pre-populate messages to skip system-prompt init path
 	a.messages = []types.Message{{Role: "system", Content: "sys"}}
 
@@ -73,7 +76,10 @@ func TestRun_GuardEmptyInputNoPendingNotifs(t *testing.T) {
 
 func TestRun_DrainsPendingNotificationsAsMessages(t *testing.T) {
 	cfg := types.AgentConfig{Model: "test/model", WorkDir: t.TempDir(), MaxDelegateDepth: 2}
-	a := NewAIAgent(cfg, nil, nil)
+	a, err := NewAIAgent(cfg, nil, nil)
+	if err != nil {
+		t.Fatalf("NewAIAgent: %v", err)
+	}
 	a.messages = []types.Message{{Role: "system", Content: "sys"}}
 
 	// Wire mock LLM after NewAIAgent so wireRunners() doesn't overwrite it

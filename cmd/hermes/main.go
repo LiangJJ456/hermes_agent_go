@@ -156,7 +156,11 @@ func main() {
 	}
 
 	// 创建 Agent
-	ag := agent.NewAIAgent(cfg, router, reg)
+	ag, err := agent.NewAIAgent(cfg, router, reg)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "❌ Failed to initialize agent: %v\n", err)
+		os.Exit(1)
+	}
 
 	// ── 初始化 TODO 规划系统 ──
 	todoStore := builtin.NewTodoStore()

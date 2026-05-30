@@ -74,7 +74,10 @@ func TestHandleAsync_ReturnsImmediately(t *testing.T) {
 		MaxDelegateDepth:      2,
 		DelegateMaxIterations: 5,
 	}
-	parentAgent := agent.NewAIAgent(cfg, nil, nil)
+	parentAgent, err := agent.NewAIAgent(cfg, nil, nil)
+	if err != nil {
+		t.Fatalf("NewAIAgent: %v", err)
+	}
 	p := NewProvider(parentAgent, 3)
 
 	args := json.RawMessage(`{"task": "analyze something"}`)
@@ -104,11 +107,14 @@ func TestHandleAsync_NotifiesParentOnCompletion(t *testing.T) {
 		MaxDelegateDepth:      2,
 		DelegateMaxIterations: 3,
 	}
-	parentAgent := agent.NewAIAgent(cfg, nil, nil)
+	parentAgent, err := agent.NewAIAgent(cfg, nil, nil)
+	if err != nil {
+		t.Fatalf("NewAIAgent: %v", err)
+	}
 	p := NewProvider(parentAgent, 3)
 
 	args := json.RawMessage(`{"task": "quick task"}`)
-	_, err := p.handleAsync(context.Background(), args)
+	_, err = p.handleAsync(context.Background(), args)
 	if err != nil {
 		t.Fatalf("handleAsync error: %v", err)
 	}
