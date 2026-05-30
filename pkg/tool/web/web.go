@@ -120,7 +120,7 @@ func (w *WebTool) ScrapeWebPage(urlStr string, selector string) (map[string]inte
 		return nil, err
 	}
 
-	statusCode := int(resp["status_code"].(float64))
+	statusCode, _ := resp["status_code"].(int)
 	if statusCode < 200 || statusCode >= 300 {
 		return nil, errx.New(fmt.Sprintf("request failed with status %d", statusCode))
 	}

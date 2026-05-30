@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 )
 
 func TestSpanContext_Propagation(t *testing.T) {
@@ -42,6 +43,7 @@ func TestSpan_End(t *testing.T) {
 	_, span := StartSpan(ctx, "test", "tool")
 
 	span.SetAttribute("key", "value")
+	time.Sleep(time.Millisecond) // ensure EndTime > StartTime on low-res Windows timers
 	span.End(nil)
 
 	if span.Status != SpanOK {
