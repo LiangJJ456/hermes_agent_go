@@ -67,3 +67,17 @@ func TestBuildGraph_ErrorsOnUnreadablePath(t *testing.T) {
 		t.Fatal("expected error for missing graph file, got nil")
 	}
 }
+
+func TestBuildGraph_RejectsInvalidConditionInCustomGraph(t *testing.T) {
+	// A custom graph whose edge condition is not a valid expression must be
+	// rejected at load time, not silently accepted.
+	custom := `{"StartAt":"a","Nodes":{"a":{"Type":"end"},"b":{"Type":"end"}},"Edges":[{"From":"a","To":"b","Condition":"input.x + 1"}]}`
+	path := filepath.Join(t.TempDir(), "graph.json")
+	if err := os.WriteFile(path, []byte(custom), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg := types.AgentConfig{GraphPath: path}
+	if _, err := BuildGraph(cfg); err == nil {
+		t.Fatal("expected error for invalid condition in custom graph, got nil")
+	}
+}

@@ -223,6 +223,9 @@ func mergeConfig(dst, src *AgentConfig) {
 	if src.WorkDir != "" {
 		dst.WorkDir = src.WorkDir
 	}
+	if src.GraphPath != "" {
+		dst.GraphPath = src.GraphPath
+	}
 	if src.SkipMemory {
 		dst.SkipMemory = true
 	}

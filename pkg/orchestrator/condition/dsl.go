@@ -89,6 +89,9 @@ func toStringMap(v interface{}) (map[string]interface{}, bool) {
 	return m, ok
 }
 
+// evalUnary handles only logical NOT (`!`). Note that a negative number
+// literal (e.g. `-3`) parses as a unary SUB and is therefore unsupported;
+// compare relative to zero instead (e.g. `input.count < 0`).
 func evalUnary(node *ast.UnaryExpr, scope Scope) (interface{}, error) {
 	if node.Op != token.NOT {
 		return nil, fmt.Errorf("unsupported unary operator %q", node.Op)
