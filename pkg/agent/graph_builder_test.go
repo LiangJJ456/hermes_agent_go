@@ -111,8 +111,8 @@ func TestNewChildAgent_DropsStreamForwardsOtherEvents(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var got []EventType
-	parent.SetEventCallback(func(e Event) { got = append(got, e.Type) })
+	var forwarded []Event
+	parent.SetEventCallback(func(e Event) { forwarded = append(forwarded, e) })
 
 	child, err := parent.NewChildAgent("do something")
 	if err != nil {
@@ -125,18 +125,19 @@ func TestNewChildAgent_DropsStreamForwardsOtherEvents(t *testing.T) {
 	child.eventCB(Event{Type: EventStreamDelta, Content: "tok"})
 	child.eventCB(Event{Type: EventToolStart, ToolName: "t"})
 
-	for _, e := range got {
-		if e == EventStreamDelta {
+	var toolStart *Event
+	for i := range forwarded {
+		if forwarded[i].Type == EventStreamDelta {
 			t.Fatal("child stream deltas must not be forwarded (would interleave)")
 		}
-	}
-	found := false
-	for _, e := range got {
-		if e == EventToolStart {
-			found = true
+		if forwarded[i].Type == EventToolStart {
+			toolStart = &forwarded[i]
 		}
 	}
-	if !found {
+	if toolStart == nil {
 		t.Fatal("child tool-start events must forward to the parent callback")
+	}
+	if !toolStart.FromSubAgent {
+		t.Fatal("forwarded sub-agent events must be marked FromSubAgent for display labeling")
 	}
 }

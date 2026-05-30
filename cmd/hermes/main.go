@@ -279,11 +279,15 @@ func main() {
 	// 设置事件回调（CLI 输出）
 	streamedThisTurn := false
 	ag.SetEventCallback(func(e agent.Event) {
+		label := ""
+		if e.FromSubAgent {
+			label = "[子Agent] "
+		}
 		switch e.Type {
 		case agent.EventToolStart:
-			fmt.Fprintf(os.Stderr, "  🔧 %s(%s)\n", e.ToolName, truncate(e.ToolArgs, 80))
+			fmt.Fprintf(os.Stderr, "  🔧 %s%s(%s)\n", label, e.ToolName, truncate(e.ToolArgs, 80))
 		case agent.EventToolEnd:
-			fmt.Fprintf(os.Stderr, "  ✓ %s\n", e.ToolName)
+			fmt.Fprintf(os.Stderr, "  ✓ %s%s\n", label, e.ToolName)
 		case agent.EventStreamDelta:
 			fmt.Print(e.Content)
 			streamedThisTurn = true

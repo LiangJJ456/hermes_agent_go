@@ -40,12 +40,13 @@ const (
 
 // Event Agent 运行事件
 type Event struct {
-	Type      EventType
-	ToolName  string
-	ToolArgs  string
-	Content   string
-	Error     error
-	Timestamp time.Time
+	Type         EventType
+	ToolName     string
+	ToolArgs     string
+	Content      string
+	Error        error
+	Timestamp    time.Time
+	FromSubAgent bool // event originated in a delegated sub-agent (for display labeling)
 }
 
 // EventCallback 事件回调
@@ -627,6 +628,7 @@ func (a *AIAgent) NewChildAgent(task string) (*AIAgent, error) {
 			if e.Type == EventStreamDelta {
 				return
 			}
+			e.FromSubAgent = true // label so the display can mark sub-agent tool calls
 			a.mu.Lock()
 			a.eventCB(e)
 			a.mu.Unlock()
