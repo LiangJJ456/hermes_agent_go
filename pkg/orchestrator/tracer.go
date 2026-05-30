@@ -42,3 +42,7 @@ func (b *LegacyBridge) EndNodeSpan(span *trace.Span, err error) {
 func (b *LegacyBridge) OnStreamDelta(ctx context.Context, content string) {
 	b.Old.OnStreamDelta(ctx, content)
 }
+
+func (b *LegacyBridge) OnToolStart(_ context.Context, _ string, _ string) {
+	// LegacyBridge has no equivalent on the deprecated Tracer interface.
+}

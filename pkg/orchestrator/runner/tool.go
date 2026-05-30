@@ -25,9 +25,14 @@ type ToolInvoker interface {
 		timeout uint) (*orchestrator.NodeResult, error)
 }
 
+// ToolStartFunc is fired right before a tool starts executing, so long-running
+// tools can give the user real-time feedback (e.g. a "🔧 toolname(...)" line).
+type ToolStartFunc func(ctx context.Context, toolName, toolArgs string)
+
 // ToolRunner executes a tool by delegating to a ToolInvoker.
 type ToolRunner struct {
-	Invoker ToolInvoker
+	Invoker     ToolInvoker
+	OnToolStart ToolStartFunc // optional: fired before Invoker.Invoke
 }
 
 // SetInvoker sets the tool invoker.
@@ -58,20 +63,32 @@ func (r *ToolRunner) Run(ctx context.Context, node *orchestrator.NodeSpec,
 	}
 
 	// Write tool info to current span for tracing/event callbacks
-	if span := trace.SpanFromContext(ctx); span != nil {
-		span.SetAttribute("tool_name", resource)
-		if input != nil {
-			if b, merr := json.Marshal(input); merr == nil {
-				span.SetAttribute("tool_args", string(b))
-			}
+	var toolArgsStr string
+	if input != nil {
+		if b, merr := json.Marshal(input); merr == nil {
+			toolArgsStr = string(b)
 		}
 	}
+	if span := trace.SpanFromContext(ctx); span != nil {
+		span.SetAttribute("tool_name", resource)
+		if toolArgsStr != "" {
+			span.SetAttribute("tool_args", toolArgsStr)
+		}
+	}
+	// Fire start event BEFORE invoke so long tools give live feedback.
+	if r.OnToolStart != nil {
+		r.OnToolStart(ctx, resource, toolArgsStr)
+	}
+
 	result, err := r.Invoker.Invoke(ctx, resource, input, cfg.Timeout)
 	if err != nil {
 		return nil, err
 	}
 
-	// Append tool result to ConvMem so the LLM sees tool output on the next call.
+	// Append tool result to ConvMem only for LLM-initiated tool calls (those with a
+	// tool_call_id). Graph-level tool nodes (compress, wait_and_retry, etc.) have no
+	// tool_call_id and must NOT add a role:"tool" message — the API rejects tool
+	// messages that lack a matching assistant tool_calls entry.
 	if ec, ok := execCtx.(*agcontext.ExecutionContext); ok && ec.ConvMem != nil {
 		toolCallID := ""
 		if inputMap, ok := input.(map[string]interface{}); ok {
@@ -79,21 +96,23 @@ func (r *ToolRunner) Run(ctx context.Context, node *orchestrator.NodeSpec,
 				toolCallID = id
 			}
 		}
-		resultContent := ""
-		if result.Output != nil {
-			if s, ok := result.Output.(string); ok {
-				resultContent = s
-			} else {
-				b, _ := json.Marshal(result.Output)
-				resultContent = string(b)
+		if toolCallID != "" {
+			resultContent := ""
+			if result.Output != nil {
+				if s, ok := result.Output.(string); ok {
+					resultContent = s
+				} else {
+					b, _ := json.Marshal(result.Output)
+					resultContent = string(b)
+				}
 			}
+			ec.ConvMem.AddMessage(agcontext.Message{
+				Role:       "tool",
+				Content:    resultContent,
+				Name:       resource,
+				ToolCallID: toolCallID,
+			})
 		}
-		ec.ConvMem.AddMessage(agcontext.Message{
-			Role:       "tool",
-			Content:    resultContent,
-			Name:       resource,
-			ToolCallID: toolCallID,
-		})
 	}
 
 	// Async mode: explicit Async config OR resource suffix .waitForCallback

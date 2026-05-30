@@ -8,6 +8,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -15,6 +16,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -305,13 +307,31 @@ func main() {
 		}
 	})
 
-	sigCh := make(chan os.Signal, 1)
+	// runCancel holds the cancel func for the currently-executing ag.Run call.
+	// SIGINT calls it to interrupt only the current run, leaving the REPL alive.
+	var runCancel atomic.Pointer[context.CancelFunc]
+
+	sigCh := make(chan os.Signal, 2)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
-		<-sigCh
-		fmt.Fprintf(os.Stderr, "\n🛑 Interrupted\n")
-		doShutdown()
-		cancel()
+		for sig := range sigCh {
+			if sig == syscall.SIGTERM {
+				fmt.Fprintf(os.Stderr, "\n🛑 Terminated\n")
+				doShutdown()
+				cancel()
+				return
+			}
+			// SIGINT: cancel current run if active; otherwise exit.
+			if fn := runCancel.Load(); fn != nil {
+				(*fn)()
+				fmt.Fprintf(os.Stderr, "\n⚠️  Run interrupted (Ctrl+C again to exit)\n>>> ")
+			} else {
+				fmt.Fprintf(os.Stderr, "\n🛑 Interrupted\n")
+				doShutdown()
+				cancel()
+				return
+			}
+		}
 	}()
 
 	// REPL 循环
@@ -329,6 +349,35 @@ func main() {
 		close(stdinCh)
 	}()
 
+	type agentResult struct {
+		reply  string
+		err    error
+		prefix string
+	}
+	type pendingRun struct {
+		input  string
+		prefix string
+	}
+
+	// runDoneCh receives the result of the background ag.Run goroutine.
+	// Buffer 1 ensures the goroutine never blocks even if the main loop has exited.
+	runDoneCh := make(chan agentResult, 1)
+	var pending []pendingRun
+	isRunning := false
+
+	startRun := func(input, prefix string) {
+		isRunning = true
+		streamedThisTurn = false
+		runCtx, cancelRun := context.WithCancel(ctx)
+		runCancel.Store(&cancelRun)
+		go func() {
+			reply, _, err := ag.Run(runCtx, input)
+			runCancel.Store(nil)
+			cancelRun()
+			runDoneCh <- agentResult{reply, err, prefix}
+		}()
+	}
+
 	fmt.Print(">>> ")
 	for {
 		select {
@@ -338,38 +387,54 @@ func main() {
 			}
 			input := strings.TrimSpace(line)
 			if input == "" {
-				fmt.Print(">>> ")
+				if !isRunning {
+					fmt.Print(">>> ")
+				}
 				continue
 			}
 			if handleReplCommand(input, ag, todoStore, mcpMgr, doShutdown, cancel) {
-				fmt.Print(">>> ")
+				if !isRunning {
+					fmt.Print(">>> ")
+				}
 				continue
 			}
-
-			streamedThisTurn = false
-			reply, _, err := ag.Run(ctx, input)
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "\n❌ Error: %v\n", err)
-			} else if !streamedThisTurn && reply != "" {
-				fmt.Println(reply)
+			if isRunning {
+				pending = append(pending, pendingRun{input, ""})
+				fmt.Fprintf(os.Stderr, "  ⌛ 已排队，等待当前任务完成 (Ctrl+C 可中断)\n")
 			} else {
-				fmt.Println()
+				startRun(input, "")
 			}
-			fmt.Print(">>> ")
 
-		case <-ag.NotifCh():
-			streamedThisTurn = false
-			reply, _, err := ag.Run(ctx, "")
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "\n[async] ❌ %v\n", err)
-			} else if reply != "" {
-				if !streamedThisTurn {
-					fmt.Printf("\n[async] %s\n", reply)
+		case result := <-runDoneCh:
+			isRunning = false
+			if result.err != nil && errors.Is(result.err, context.Canceled) {
+				// Interrupted: discard queued inputs so stale commands don't replay.
+				pending = pending[:0]
+				fmt.Fprintln(os.Stderr)
+				fmt.Print(">>> ")
+			} else {
+				if result.err != nil {
+					fmt.Fprintf(os.Stderr, "\n%s❌ Error: %v\n", result.prefix, result.err)
+				} else if !streamedThisTurn && result.reply != "" {
+					fmt.Printf("%s%s\n", result.prefix, result.reply)
 				} else {
 					fmt.Println()
 				}
+				if len(pending) > 0 {
+					next := pending[0]
+					pending = pending[1:]
+					startRun(next.input, next.prefix)
+				} else {
+					fmt.Print(">>> ")
+				}
 			}
-			fmt.Print(">>> ")
+
+		case <-ag.NotifCh():
+			if isRunning {
+				pending = append(pending, pendingRun{"", "[async] "})
+			} else {
+				startRun("", "[async] ")
+			}
 
 		case <-ctx.Done():
 			return

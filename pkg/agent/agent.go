@@ -177,6 +177,13 @@ func (a *AIAgent) wireRunners() {
 	if entry, ok := orchestrator.LookupNodeType("tool"); ok {
 		if r, ok := entry.Runner.(*orchrunner.ToolRunner); ok {
 			r.SetInvoker(a.toolInvoker)
+			// Wire tool-start event so users see "🔧 tool(...)" the moment a tool begins,
+			// not after it completes — critical for long-running tools.
+			r.OnToolStart = func(ctx context.Context, toolName, toolArgs string) {
+				if a.executor.Tracer != nil {
+					a.executor.Tracer.OnToolStart(ctx, toolName, toolArgs)
+				}
+			}
 		}
 	}
 	if entry, ok := orchestrator.LookupNodeType("parallel"); ok {
@@ -491,11 +498,15 @@ func (a *AIAgent) SetCompressor(c *agentctx.Compressor) {
 		a.llmInvoker.Compressor = (*compressorBridge)(c)
 		a.toolInvoker.Compressor = (*compressorBridge)(c)
 		a.toolInvoker.CompressFn = func(ctx context.Context) error {
+			// Read from convMem: it's always current during a turn.
+			// a.messages is only synced at turn-start and misses intra-turn
+			// LLM responses and tool results (which carry tool_call_id).
 			a.mu.Lock()
-			msgs := make([]types.Message, len(a.messages))
-			copy(msgs, a.messages)
+			orchMsgs := make([]orchcontext.Message, len(a.convMem.Messages))
+			copy(orchMsgs, a.convMem.Messages)
 			a.mu.Unlock()
 
+			msgs := orchMessagesToTypes(orchMsgs)
 			compressed, err := c.Compress(ctx, msgs)
 			if err != nil {
 				return err
@@ -693,6 +704,40 @@ func messagesToOrchMessages(msgs []types.Message) []orchcontext.Message {
 				}
 			}
 			msg.ToolCalls = tcs
+		}
+		result[i] = msg
+	}
+	return result
+}
+
+// orchMessagesToTypes converts the orchestrator's flat Message format back to types.Message.
+// Used by CompressFn which must compress the live convMem snapshot, not the stale a.messages.
+func orchMessagesToTypes(msgs []orchcontext.Message) []types.Message {
+	result := make([]types.Message, len(msgs))
+	for i, m := range msgs {
+		msg := types.Message{
+			Role:       types.Role(m.Role),
+			Content:    m.Content,
+			Name:       m.Name,
+			ToolCallID: m.ToolCallID,
+		}
+		for _, tc := range m.ToolCalls {
+			var toolCall types.ToolCall
+			if id, ok := tc["id"].(string); ok {
+				toolCall.ID = id
+			}
+			if typ, ok := tc["type"].(string); ok {
+				toolCall.Type = typ
+			}
+			if fn, ok := tc["function"].(map[string]interface{}); ok {
+				if name, ok := fn["name"].(string); ok {
+					toolCall.Function.Name = name
+				}
+				if args, ok := fn["arguments"].(string); ok {
+					toolCall.Function.Arguments = args
+				}
+			}
+			msg.ToolCalls = append(msg.ToolCalls, toolCall)
 		}
 		result[i] = msg
 	}

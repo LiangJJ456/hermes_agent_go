@@ -34,8 +34,7 @@ func (t *eventTracer) EndNodeSpan(span *trace.Span, err error) {
 		t.cb(Event{Type: EventError, Content: err.Error(), Timestamp: time.Now()})
 		return
 	}
-	switch span.NodeType {
-	case "tool":
+	if span.NodeType == "tool" {
 		toolName := span.Name
 		var toolArgs string
 		if n, ok := span.GetAttribute("tool_name"); ok {
@@ -48,7 +47,6 @@ func (t *eventTracer) EndNodeSpan(span *trace.Span, err error) {
 				toolArgs = s
 			}
 		}
-		t.cb(Event{Type: EventToolStart, ToolName: toolName, ToolArgs: toolArgs, Timestamp: span.StartTime})
 		t.cb(Event{Type: EventToolEnd, ToolName: toolName, ToolArgs: toolArgs, Timestamp: time.Now()})
 	}
 }
@@ -57,5 +55,15 @@ func (t *eventTracer) OnStreamDelta(ctx context.Context, content string) {
 	t.inner.OnStreamDelta(ctx, content)
 	if t.cb != nil {
 		t.cb(Event{Type: EventStreamDelta, Content: content, Timestamp: time.Now()})
+	}
+}
+
+// OnToolStart fires when a tool actually begins executing (before Invoker.Invoke).
+// This is the real-time signal users need for long-running tools — EndNodeSpan
+// can't be used because it fires only after the tool completes.
+func (t *eventTracer) OnToolStart(ctx context.Context, toolName, toolArgs string) {
+	t.inner.OnToolStart(ctx, toolName, toolArgs)
+	if t.cb != nil {
+		t.cb(Event{Type: EventToolStart, ToolName: toolName, ToolArgs: toolArgs, Timestamp: time.Now()})
 	}
 }

@@ -15,6 +15,8 @@ type Tracer interface {
 	EndNodeSpan(span *Span, err error)
 	// OnStreamDelta 流式输出事件（可选实现）
 	OnStreamDelta(ctx context.Context, content string)
+	// OnToolStart 工具开始执行时发出（用于实时反馈长任务，工具结束在 EndNodeSpan 中处理）
+	OnToolStart(ctx context.Context, toolName, toolArgs string)
 }
 
 // --- NopTracer ---
@@ -25,8 +27,9 @@ type NopTracer struct{}
 func (*NopTracer) StartNodeSpan(ctx context.Context, nodeID, nodeType string) (context.Context, *Span) {
 	return StartSpan(ctx, "node:"+nodeID, nodeType)
 }
-func (*NopTracer) EndNodeSpan(span *Span, err error) { span.End(err) }
-func (*NopTracer) OnStreamDelta(_ context.Context, _ string) {}
+func (*NopTracer) EndNodeSpan(span *Span, err error)                    { span.End(err) }
+func (*NopTracer) OnStreamDelta(_ context.Context, _ string)            {}
+func (*NopTracer) OnToolStart(_ context.Context, _ string, _ string)    {}
 
 // --- LocalTracer: 本地 JSON 日志输出 ---
 
@@ -74,7 +77,8 @@ func (t *LocalTracer) EndNodeSpan(span *Span, err error) {
 	}
 }
 
-func (t *LocalTracer) OnStreamDelta(_ context.Context, _ string) {}
+func (t *LocalTracer) OnStreamDelta(_ context.Context, _ string)         {}
+func (t *LocalTracer) OnToolStart(_ context.Context, _ string, _ string) {}
 
 // Spans 返回已收集的所有 span（用于测试或 trace 导出）
 func (t *LocalTracer) Spans() []*Span {
@@ -113,5 +117,11 @@ func (c *CompositeTracer) EndNodeSpan(span *Span, err error) {
 func (c *CompositeTracer) OnStreamDelta(ctx context.Context, content string) {
 	for _, t := range c.tracers {
 		t.OnStreamDelta(ctx, content)
+	}
+}
+
+func (c *CompositeTracer) OnToolStart(ctx context.Context, toolName, toolArgs string) {
+	for _, t := range c.tracers {
+		t.OnToolStart(ctx, toolName, toolArgs)
 	}
 }
