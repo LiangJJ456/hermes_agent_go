@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"go/ast"
 	"go/parser"
+	"go/token"
+	"strconv"
 )
 
 // undefinedT marks a value referenced in scope but not present. Comparisons
@@ -55,6 +57,10 @@ func evalNode(n ast.Expr, scope Scope) (interface{}, error) {
 		return evalIdent(node, scope)
 	case *ast.SelectorExpr:
 		return evalSelector(node, scope)
+	case *ast.BinaryExpr:
+		return evalBinary(node, scope)
+	case *ast.BasicLit:
+		return evalLit(node)
 	default:
 		return nil, fmt.Errorf("unsupported expression: %T", n)
 	}
@@ -102,6 +108,125 @@ func evalIdent(node *ast.Ident, scope Scope) (interface{}, error) {
 		return scope.State, nil
 	default:
 		return nil, fmt.Errorf("unknown identifier %q (expected input/state/true/false)", node.Name)
+	}
+}
+
+func evalLit(node *ast.BasicLit) (interface{}, error) {
+	switch node.Kind {
+	case token.INT, token.FLOAT:
+		f, err := strconv.ParseFloat(node.Value, 64)
+		if err != nil {
+			return nil, fmt.Errorf("invalid number literal %q: %w", node.Value, err)
+		}
+		return f, nil
+	case token.STRING:
+		s, err := strconv.Unquote(node.Value)
+		if err != nil {
+			return nil, fmt.Errorf("invalid string literal %q: %w", node.Value, err)
+		}
+		return s, nil
+	default:
+		return nil, fmt.Errorf("unsupported literal: %s", node.Kind)
+	}
+}
+
+func evalBinary(node *ast.BinaryExpr, scope Scope) (interface{}, error) {
+	switch node.Op {
+	case token.EQL, token.NEQ, token.LSS, token.GTR, token.LEQ, token.GEQ:
+		l, err := evalNode(node.X, scope)
+		if err != nil {
+			return nil, err
+		}
+		r, err := evalNode(node.Y, scope)
+		if err != nil {
+			return nil, err
+		}
+		return compare(node.Op, l, r)
+	default:
+		return nil, fmt.Errorf("unsupported operator %q", node.Op)
+	}
+}
+
+func compare(op token.Token, l, r interface{}) (bool, error) {
+	// undefined: only equality is meaningful.
+	if l == undefined || r == undefined {
+		switch op {
+		case token.EQL:
+			return l == r, nil
+		case token.NEQ:
+			return l != r, nil
+		default:
+			return false, nil
+		}
+	}
+	// numeric (cross-type via float64).
+	if lf, lok := toFloat64(l); lok {
+		rf, rok := toFloat64(r)
+		if !rok {
+			return op == token.NEQ, nil // number vs non-number: unequal
+		}
+		switch op {
+		case token.EQL:
+			return lf == rf, nil
+		case token.NEQ:
+			return lf != rf, nil
+		case token.LSS:
+			return lf < rf, nil
+		case token.GTR:
+			return lf > rf, nil
+		case token.LEQ:
+			return lf <= rf, nil
+		case token.GEQ:
+			return lf >= rf, nil
+		}
+	}
+	// string (lexicographic).
+	if ls, lok := l.(string); lok {
+		rs, rok := r.(string)
+		if !rok {
+			return op == token.NEQ, nil
+		}
+		switch op {
+		case token.EQL:
+			return ls == rs, nil
+		case token.NEQ:
+			return ls != rs, nil
+		case token.LSS:
+			return ls < rs, nil
+		case token.GTR:
+			return ls > rs, nil
+		case token.LEQ:
+			return ls <= rs, nil
+		case token.GEQ:
+			return ls >= rs, nil
+		}
+	}
+	// bool and everything else: equality only.
+	switch op {
+	case token.EQL:
+		return l == r, nil
+	case token.NEQ:
+		return l != r, nil
+	default:
+		return false, fmt.Errorf("operator %q not supported for values %T and %T", op, l, r)
+	}
+}
+
+// toFloat64 normalizes JSON numbers (float64) and runtime ints to float64.
+func toFloat64(v interface{}) (float64, bool) {
+	switch n := v.(type) {
+	case float64:
+		return n, true
+	case float32:
+		return float64(n), true
+	case int:
+		return float64(n), true
+	case int32:
+		return float64(n), true
+	case int64:
+		return float64(n), true
+	default:
+		return 0, false
 	}
 }
 

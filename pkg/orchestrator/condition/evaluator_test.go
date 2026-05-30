@@ -49,3 +49,39 @@ func TestEvaluate_BooleanLiterals(t *testing.T) {
 		}
 	}
 }
+
+func TestEvaluate_Comparisons(t *testing.T) {
+	scope := Scope{
+		Input: map[string]interface{}{
+			"count": 3, // Go int (runtime value)
+			"name":  "alice",
+			"flag":  true,
+		},
+	}
+	cases := []struct {
+		expr string
+		want bool
+	}{
+		{"input.count == 3", true}, // int vs JSON-number(float64) must match
+		{"input.count != 3", false},
+		{"input.count > 2", true},
+		{"input.count < 2", false},
+		{"input.count >= 3", true},
+		{"input.count <= 2", false},
+		{`input.name == "alice"`, true},
+		{`input.name != "bob"`, true},
+		{"input.flag == true", true},
+		{"input.flag == false", false},
+		{"input.missing == 3", false}, // undefined vs value -> false
+		{"input.missing != 3", true},  // undefined != value -> true
+	}
+	for _, c := range cases {
+		got, err := Evaluate(c.expr, scope)
+		if err != nil {
+			t.Fatalf("Evaluate(%q) error: %v", c.expr, err)
+		}
+		if got != c.want {
+			t.Fatalf("Evaluate(%q) = %v, want %v", c.expr, got, c.want)
+		}
+	}
+}
