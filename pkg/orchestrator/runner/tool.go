@@ -19,12 +19,6 @@ type ToolConfig struct {
 	Async      bool                   `json:"Async,omitempty"`
 }
 
-// ToolInvoker abstracts tool execution. hermes adapts tool.Registry to this.
-type ToolInvoker interface {
-	Invoke(ctx context.Context, resource string, input interface{},
-		timeout uint) (*orchestrator.NodeResult, error)
-}
-
 // ToolStartFunc is fired right before a tool starts executing, so long-running
 // tools can give the user real-time feedback (e.g. a "🔧 toolname(...)" line).
 type ToolStartFunc func(ctx context.Context, toolName, toolArgs string)

@@ -9,34 +9,6 @@ import (
 	agcontext "code.byted.org/ad_creative/hermes_agent_go/pkg/orchestrator/context"
 )
 
-// LLMConfig configures an llm node.
-type LLMConfig struct {
-	Model        string          `json:"Model"`
-	SystemPrompt string          `json:"SystemPrompt,omitempty"`
-	UserPrompt   string          `json:"UserPrompt,omitempty"`
-	Tools        []string        `json:"Tools,omitempty"`
-	OutputSchema json.RawMessage `json:"OutputSchema,omitempty"`
-	Temperature  float64         `json:"Temperature,omitempty"`
-	MaxTokens    int             `json:"MaxTokens,omitempty"`
-}
-
-// LLMMessage is a single message sent to the LLM.
-type LLMMessage struct {
-	Role       string                   `json:"Role"`
-	Content    string                   `json:"Content"`
-	Name       string                   `json:"Name,omitempty"`
-	ToolCalls  []map[string]interface{} `json:"ToolCalls,omitempty"`
-	ToolCallID string                   `json:"ToolCallID,omitempty"`
-}
-
-// LLMInvoker abstracts the actual LLM call. hermes adapts model.Router to this.
-type LLMInvoker interface {
-	Chat(ctx context.Context, model string, messages []LLMMessage,
-		tools []string, cfg LLMConfig) (*orchestrator.NodeResult, error)
-	ChatStream(ctx context.Context, model string, messages []LLMMessage,
-		tools []string, cfg LLMConfig, onDelta func(string)) (*orchestrator.NodeResult, error)
-}
-
 // StreamDeltaFunc is a callback for streaming LLM output deltas.
 type StreamDeltaFunc func(ctx context.Context, content string)
 

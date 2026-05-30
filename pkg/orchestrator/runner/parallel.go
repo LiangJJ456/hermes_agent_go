@@ -15,19 +15,6 @@ type ParallelConfig struct {
 	Branches []*orchestrator.Graph `json:"Branches"`
 }
 
-// GraphExecutor executes a sub-graph. The orchestrator Executor implements this.
-type GraphExecutor interface {
-	Execute(ctx context.Context, g *orchestrator.Graph,
-		input interface{}) (interface{}, *orchestrator.ExecutionSnapshot, error)
-}
-
-// ContextGraphExecutor extends GraphExecutor with ConvMem-aware execution.
-type ContextGraphExecutor interface {
-	GraphExecutor
-	ExecuteWithContext(ctx context.Context, g *orchestrator.Graph,
-		ec *agcontext.ExecutionContext) (interface{}, *orchestrator.ExecutionSnapshot, error)
-}
-
 // ParallelRunner executes multiple branches concurrently.
 type ParallelRunner struct {
 	Executor GraphExecutor
