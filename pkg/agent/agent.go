@@ -161,24 +161,7 @@ func NewAIAgent(cfg types.AgentConfig, router *model.Router, reg *registry.Regis
 	a.executor.LLMInvoker = a.llmInvoker
 	a.executor.ToolInvoker = a.toolInvoker
 
-	// Wire invokers to runners
-	a.wireRunners()
-
 	return a, nil
-}
-
-// wireRunners connects adapters to orchestrator runners.
-//
-// TODO(tech-debt): the LLM/Tool/Parallel runners are process-global singletons
-// (registered once via orchestrator.RegisterNodeType). wireRunners mutates their
-// Invoker / OnToolStart / Executor per agent, so the LAST agent to call this wins
-// globally. After a delegation the global ToolRunner.Invoker is left pointing at
-// the child's invoker (which has memory/delegate tools disabled), and concurrent
-// async delegation races on these shared fields. The display side is patched
-// (child events forward to the parent), but the proper fix is to stop storing
-// per-agent state on the global runner — pass the invoker/tracer through the
-// per-execution ExecutionContext into Run instead.
-func (a *AIAgent) wireRunners() {
 }
 
 // SetEventCallback 设置事件回调
@@ -603,9 +586,9 @@ func (a *AIAgent) NewChildAgent(task string) (*AIAgent, error) {
 	// 子 Agent 转发事件给父回调，但丢弃流式 delta：
 	//   - 丢弃 EventStreamDelta：子 agent 的逐 token 输出若直接打印，会与父 agent
 	//     （及 parallel/async 下的兄弟子 agent）的输出字符级交错。只有顶层 agent 流式。
-	//   - 仍转发工具 start/end 等事件：ToolRunner 是全局单例，wireRunners 会把它的
-	//     OnToolStart 指向"当前 agent"。委托后该指针残留指向子 agent，若子 agent 的
-	//     tracer 不转发，主 agent 后续的 🔧 标记会被静默吞掉。转发到父回调可避免此回归。
+	//   - 仍转发工具 start/end 等事件：让子 agent 的工具活动在父终端可见（带 [子Agent]
+	//     标识，见 e.FromSubAgent）。子 agent 经自己的 ExecutionContext.Tracer 触发这些
+	//     事件，不依赖任何全局状态。
 	// 用 mu 保护，防止多个并发子 Agent 同时调用 eventCB 导致 race。
 	if a.eventCB != nil {
 		child.SetEventCallback(func(e Event) {

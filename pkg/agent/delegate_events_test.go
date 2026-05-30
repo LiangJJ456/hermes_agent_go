@@ -8,14 +8,13 @@ import (
 	"code.byted.org/ad_creative/hermes_agent_go/pkg/types"
 )
 
-// TestParentToolEventsSurviveDelegation guards against a regression where a
-// delegation leaves the global ToolRunner in a stale per-agent state.
-//
-// Since ToolRunner is now stateless (it reads invoker/tracer from the per-execution
-// ExecutionContext stamped by the Executor), there is no per-agent mutable field to
-// go stale. This test verifies the structural guarantee: the registered ToolRunner
-// has no mutable invoker/tracer fields, so delegation cannot break parent events.
-func TestParentToolEventsSurviveDelegation(t *testing.T) {
+// TestToolRunnerIsStateless verifies that the registered ToolRunner is the
+// stateless empty-struct singleton: it has no per-agent mutable fields
+// (invoker, tracer, etc.), so creating a child agent via delegation cannot
+// corrupt any global runner state.
+// The actual child→parent event forwarding behaviour is covered by
+// TestNewChildAgent_DropsStreamForwardsOtherEvents.
+func TestToolRunnerIsStateless(t *testing.T) {
 	parent, err := NewAIAgent(types.AgentConfig{MaxDelegateDepth: 2}, nil, nil)
 	if err != nil {
 		t.Fatal(err)
