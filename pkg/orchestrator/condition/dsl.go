@@ -260,6 +260,45 @@ func toFloat64(v interface{}) (float64, bool) {
 	}
 }
 
-// checkNode is filled in by Task 5. For now accept any node so Validate is a
-// no-op beyond parsing; later tasks tighten it.
-func checkNode(n ast.Expr) error { return nil }
+func checkNode(n ast.Expr) error {
+	switch node := n.(type) {
+	case *ast.ParenExpr:
+		return checkNode(node.X)
+	case *ast.UnaryExpr:
+		if node.Op != token.NOT {
+			return fmt.Errorf("unsupported unary operator %q", node.Op)
+		}
+		return checkNode(node.X)
+	case *ast.BinaryExpr:
+		switch node.Op {
+		case token.LAND, token.LOR, token.EQL, token.NEQ,
+			token.LSS, token.GTR, token.LEQ, token.GEQ:
+		default:
+			return fmt.Errorf("unsupported operator %q", node.Op)
+		}
+		if err := checkNode(node.X); err != nil {
+			return err
+		}
+		return checkNode(node.Y)
+	case *ast.SelectorExpr:
+		// Field names (node.Sel) are arbitrary keys; only the base chain
+		// must resolve to input/state.
+		return checkNode(node.X)
+	case *ast.Ident:
+		switch node.Name {
+		case "true", "false", "input", "state":
+			return nil
+		default:
+			return fmt.Errorf("unknown identifier %q (expected input/state/true/false)", node.Name)
+		}
+	case *ast.BasicLit:
+		switch node.Kind {
+		case token.INT, token.FLOAT, token.STRING:
+			return nil
+		default:
+			return fmt.Errorf("unsupported literal kind %s", node.Kind)
+		}
+	default:
+		return fmt.Errorf("unsupported expression: %T", n)
+	}
+}

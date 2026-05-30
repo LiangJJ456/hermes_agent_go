@@ -115,3 +115,28 @@ func TestEvaluate_Comparisons(t *testing.T) {
 		}
 	}
 }
+
+func TestValidate(t *testing.T) {
+	valid := []string{
+		"input.has_tool_calls == true",
+		"input.count > 3 && state.ready",
+		`input.name != "x" || !input.flag`,
+	}
+	for _, expr := range valid {
+		if err := Validate(expr); err != nil {
+			t.Fatalf("Validate(%q) unexpected error: %v", expr, err)
+		}
+	}
+
+	invalid := []string{
+		"input.count +",        // parse error
+		"foo(input.count)",     // function call (unsupported)
+		"input.count + 1 == 4", // arithmetic (unsupported)
+		"bogus.field == 1",     // unknown root identifier
+	}
+	for _, expr := range invalid {
+		if err := Validate(expr); err == nil {
+			t.Fatalf("Validate(%q) expected error, got nil", expr)
+		}
+	}
+}
