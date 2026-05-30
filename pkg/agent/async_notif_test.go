@@ -5,8 +5,6 @@ import (
 	"testing"
 	"time"
 
-	"code.byted.org/ad_creative/hermes_agent_go/pkg/orchestrator"
-	orchrunner "code.byted.org/ad_creative/hermes_agent_go/pkg/orchestrator/runner"
 	"code.byted.org/ad_creative/hermes_agent_go/pkg/types"
 )
 
@@ -82,16 +80,8 @@ func TestRun_DrainsPendingNotificationsAsMessages(t *testing.T) {
 	}
 	a.messages = []types.Message{{Role: "system", Content: "sys"}}
 
-	// Wire mock LLM after NewAIAgent so wireRunners() doesn't overwrite it
-	entry, ok := orchestrator.LookupNodeType("llm")
-	if !ok {
-		t.Fatal("llm node type not registered")
-	}
-	r, ok := entry.Runner.(*orchrunner.LLMRunner)
-	if !ok {
-		t.Fatal("llm runner not found")
-	}
-	r.SetInvoker(&mockLLMInvoker{reply: "ack"})
+	// Wire mock LLM via executor so the stateless runner reads it from ec
+	a.executor.LLMInvoker = &mockLLMInvoker{reply: "ack"}
 
 	notif := "<task-notification><task-id>abc</task-id><status>completed</status><result>done</result></task-notification>"
 	a.pendingNotifs = []string{notif}

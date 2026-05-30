@@ -25,17 +25,9 @@ func TestGraphAgentSimpleReply(t *testing.T) {
 
 	// Set up mock LLM invoker
 	mockLLM := &mockLLMInvoker{reply: "hello from mock"}
-	entry, ok := orchestrator.LookupNodeType("llm")
-	if !ok {
-		t.Fatal("llm node type not registered")
-	}
-	runner, ok := entry.Runner.(*runner.LLMRunner)
-	if !ok {
-		t.Fatal("llm runner not found")
-	}
-	runner.SetInvoker(mockLLM)
 
 	exec := orchexec.NewExecutor(nil)
+	exec.LLMInvoker = mockLLM
 	output, snap, err := exec.Execute(context.Background(), g, "hi")
 	if err != nil {
 		t.Fatalf("execute: %v", err)

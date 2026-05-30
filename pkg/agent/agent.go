@@ -180,17 +180,6 @@ func NewAIAgent(cfg types.AgentConfig, router *model.Router, reg *registry.Regis
 // per-agent state on the global runner — pass the invoker/tracer through the
 // per-execution ExecutionContext into Run instead.
 func (a *AIAgent) wireRunners() {
-	if entry, ok := orchestrator.LookupNodeType("llm"); ok {
-		if r, ok := entry.Runner.(*orchrunner.LLMRunner); ok {
-			r.SetInvoker(a.llmInvoker)
-			// Wire streaming: delegate to executor's tracer
-			r.OnStreamDelta = func(ctx context.Context, delta string) {
-				if a.executor.Tracer != nil {
-					a.executor.Tracer.OnStreamDelta(ctx, delta)
-				}
-			}
-		}
-	}
 	if entry, ok := orchestrator.LookupNodeType("tool"); ok {
 		if r, ok := entry.Runner.(*orchrunner.ToolRunner); ok {
 			r.SetInvoker(a.toolInvoker)
