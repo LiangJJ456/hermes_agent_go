@@ -40,11 +40,12 @@ type CatchPolicy struct {
 	Next        string   `json:"Next"`
 }
 
-// EdgeSpec defines a directed edge between nodes.
+// EdgeSpec defines a directed edge between nodes. Condition is an optional
+// string expression; an edge with no Condition is an unconditional fallback.
 type EdgeSpec struct {
-	From      string          `json:"From"`
-	To        string          `json:"To"`
-	Condition json.RawMessage `json:"Condition,omitempty"`
-	Priority  int             `json:"Priority"`
-	Label     string          `json:"Label,omitempty"`
+	From      string `json:"From"`
+	To        string `json:"To"`
+	Condition string `json:"Condition,omitempty"`
+	Priority  int    `json:"Priority"`
+	Label     string `json:"Label,omitempty"`
 }
