@@ -615,10 +615,23 @@ func (a *AIAgent) NewChildAgent(task string) (*AIAgent, error) {
 	child.todoStore = a.todoStore // 子 agent 共享 TODO 状态
 	child.skillMgr = a.skillMgr   // 共享发现后端；激活集合各自独立（activeSkills 默认空）
 
-	// 子 Agent 静默运行：不向用户终端转发事件。子 agent 的流式 token 若直接
-	// 打印会与父 agent（以及 parallel/async 下的兄弟子 agent）的输出逐字交错。
-	// 只有顶层 agent 流式输出；子 agent 的结果通过 delegate 工具的返回值回到父 agent，
-	// 由父 agent 流式它的总结。
+	// 子 Agent 转发事件给父回调，但丢弃流式 delta：
+	//   - 丢弃 EventStreamDelta：子 agent 的逐 token 输出若直接打印，会与父 agent
+	//     （及 parallel/async 下的兄弟子 agent）的输出字符级交错。只有顶层 agent 流式。
+	//   - 仍转发工具 start/end 等事件：ToolRunner 是全局单例，wireRunners 会把它的
+	//     OnToolStart 指向"当前 agent"。委托后该指针残留指向子 agent，若子 agent 的
+	//     tracer 不转发，主 agent 后续的 🔧 标记会被静默吞掉。转发到父回调可避免此回归。
+	// 用 mu 保护，防止多个并发子 Agent 同时调用 eventCB 导致 race。
+	if a.eventCB != nil {
+		child.SetEventCallback(func(e Event) {
+			if e.Type == EventStreamDelta {
+				return
+			}
+			a.mu.Lock()
+			a.eventCB(e)
+			a.mu.Unlock()
+		})
+	}
 
 	return child, nil
 }

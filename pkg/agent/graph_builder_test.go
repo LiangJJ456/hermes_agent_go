@@ -102,22 +102,41 @@ func TestNewAIAgent_OKWithDefaultGraph(t *testing.T) {
 	}
 }
 
-func TestNewChildAgent_RunsSilently(t *testing.T) {
-	// Child agents must not stream to the user terminal: their token output
-	// would interleave with the parent's (and with sibling sub-agents under a
-	// parallel dispatch). Only the top-level agent streams; child results flow
-	// back as the delegate tool's return value.
+func TestNewChildAgent_DropsStreamForwardsOtherEvents(t *testing.T) {
+	// Child agents must not stream tokens to the terminal (those interleave with
+	// the parent's and siblings' output), but other events — notably tool
+	// start/end — must still forward to the parent's callback so the main
+	// agent's "🔧 tool(...)" markers keep working after a delegation.
 	parent, err := NewAIAgent(types.AgentConfig{MaxDelegateDepth: 2}, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	parent.SetEventCallback(func(Event) {})
+	var got []EventType
+	parent.SetEventCallback(func(e Event) { got = append(got, e.Type) })
 
 	child, err := parent.NewChildAgent("do something")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if child.eventCB != nil {
-		t.Fatal("expected child agent to run silently (no event callback), but one was set")
+	if child.eventCB == nil {
+		t.Fatal("expected child to have a forwarding callback")
+	}
+
+	child.eventCB(Event{Type: EventStreamDelta, Content: "tok"})
+	child.eventCB(Event{Type: EventToolStart, ToolName: "t"})
+
+	for _, e := range got {
+		if e == EventStreamDelta {
+			t.Fatal("child stream deltas must not be forwarded (would interleave)")
+		}
+	}
+	found := false
+	for _, e := range got {
+		if e == EventToolStart {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("child tool-start events must forward to the parent callback")
 	}
 }
