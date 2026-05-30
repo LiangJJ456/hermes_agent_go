@@ -1,6 +1,8 @@
 package agent
 
 import (
+	"fmt"
+	"os"
 	"strings"
 
 	"code.byted.org/ad_creative/hermes_agent_go/pkg/orchestrator"
@@ -23,8 +25,8 @@ const defaultGraphJSON = `{
       "Type": "choice",
       "Config": {
         "Choices": [
-          {"Condition": {"has_tool_calls": true}, "Next": "dispatch_tools"},
-          {"Condition": {"needs_compression": true}, "Next": "compress"}
+          {"Condition": "input.has_tool_calls == true", "Next": "dispatch_tools"},
+          {"Condition": "input.needs_compression == true", "Next": "compress"}
         ],
         "Default": "end"
       }
@@ -51,6 +53,29 @@ const defaultGraphJSON = `{
   ]
 }`
 
+// BuildGraph returns the orchestrator graph for the agent. When cfg.GraphPath
+// is set, the graph is loaded from that file; otherwise the built-in default
+// graph is used. In both cases the cfg values (MaxIterations, Temperature,
+// MaxTokens) are applied as overrides where applicable.
+func BuildGraph(cfg types.AgentConfig) (*orchestrator.Graph, error) {
+	if cfg.GraphPath == "" {
+		return BuildDefaultGraph(cfg)
+	}
+
+	data, err := os.ReadFile(cfg.GraphPath)
+	if err != nil {
+		return nil, fmt.Errorf("read custom graph %q: %w", cfg.GraphPath, err)
+	}
+
+	g, err := orchestrator.UnmarshalGraph(data)
+	if err != nil {
+		return nil, fmt.Errorf("parse custom graph %q: %w", cfg.GraphPath, err)
+	}
+
+	applyConfigOverrides(g, cfg)
+	return g, nil
+}
+
 // BuildDefaultGraph returns the default agent graph. The cfg values
 // (MaxIterations, Model, Temperature, MaxTokens) are used to override
 // defaults in the graph definition.
@@ -66,6 +91,14 @@ func BuildDefaultGraph(cfg types.AgentConfig) (*orchestrator.Graph, error) {
 		return nil, err
 	}
 
+	applyConfigOverrides(g, cfg)
+	return g, nil
+}
+
+// applyConfigOverrides applies cfg-derived overrides onto a parsed graph.
+// All overrides are guarded so they are no-ops when the relevant node or
+// value is absent, making this safe for arbitrary user-supplied graphs.
+func applyConfigOverrides(g *orchestrator.Graph, cfg types.AgentConfig) {
 	// 覆盖 MaxSteps
 	if cfg.MaxIterations > 0 {
 		g.MaxSteps = cfg.MaxIterations
@@ -82,6 +115,4 @@ func BuildDefaultGraph(cfg types.AgentConfig) (*orchestrator.Graph, error) {
 			}
 		}
 	}
-
-	return g, nil
 }
