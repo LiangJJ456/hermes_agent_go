@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"code.byted.org/ad_creative/hermes_agent_go/pkg/orchestrator"
+	agcontext "code.byted.org/ad_creative/hermes_agent_go/pkg/orchestrator/context"
 )
 
 func TestEndRunner(t *testing.T) {
@@ -126,11 +127,12 @@ func TestParallelRunnerNoExecutor(t *testing.T) {
 
 func TestToolRunnerWithMockInvoker(t *testing.T) {
 	r := &ToolRunner{}
-	r.SetInvoker(&mockToolInvoker{})
 	node := &orchestrator.NodeSpec{
 		Config: json.RawMessage(`{"Resource":"rpc/test","Timeout":10}`),
 	}
-	result, err := r.Run(context.Background(), node, "input", nil)
+	ec := agcontext.NewExecutionContext(nil)
+	ec.ToolInvoker = &mockToolInvoker{}
+	result, err := r.Run(context.Background(), node, "input", ec)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -19,20 +19,8 @@ type ToolConfig struct {
 	Async      bool                   `json:"Async,omitempty"`
 }
 
-// ToolStartFunc is fired right before a tool starts executing, so long-running
-// tools can give the user real-time feedback (e.g. a "🔧 toolname(...)" line).
-type ToolStartFunc func(ctx context.Context, toolName, toolArgs string)
-
 // ToolRunner executes a tool by delegating to a ToolInvoker.
-type ToolRunner struct {
-	Invoker     ToolInvoker
-	OnToolStart ToolStartFunc // optional: fired before Invoker.Invoke
-}
-
-// SetInvoker sets the tool invoker.
-func (r *ToolRunner) SetInvoker(inv ToolInvoker) {
-	r.Invoker = inv
-}
+type ToolRunner struct{}
 
 func (r *ToolRunner) Run(ctx context.Context, node *orchestrator.NodeSpec,
 	input interface{}, execCtx interface{}) (*orchestrator.NodeResult, error) {
@@ -46,7 +34,8 @@ func (r *ToolRunner) Run(ctx context.Context, node *orchestrator.NodeSpec,
 		json.Unmarshal(node.Config, &cfg)
 	}
 
-	if r.Invoker == nil {
+	ec, _ := execCtx.(*agcontext.ExecutionContext)
+	if ec == nil || ec.ToolInvoker == nil {
 		return nil, fmt.Errorf("tool runner: no invoker configured")
 	}
 
@@ -70,11 +59,11 @@ func (r *ToolRunner) Run(ctx context.Context, node *orchestrator.NodeSpec,
 		}
 	}
 	// Fire start event BEFORE invoke so long tools give live feedback.
-	if r.OnToolStart != nil {
-		r.OnToolStart(ctx, resource, toolArgsStr)
+	if ec.Tracer != nil {
+		ec.Tracer.OnToolStart(ctx, resource, toolArgsStr)
 	}
 
-	result, err := r.Invoker.Invoke(ctx, resource, input, cfg.Timeout)
+	result, err := ec.ToolInvoker.Invoke(ctx, resource, input, cfg.Timeout)
 	if err != nil {
 		return nil, err
 	}
@@ -83,7 +72,7 @@ func (r *ToolRunner) Run(ctx context.Context, node *orchestrator.NodeSpec,
 	// tool_call_id). Graph-level tool nodes (compress, wait_and_retry, etc.) have no
 	// tool_call_id and must NOT add a role:"tool" message — the API rejects tool
 	// messages that lack a matching assistant tool_calls entry.
-	if ec, ok := execCtx.(*agcontext.ExecutionContext); ok && ec.ConvMem != nil {
+	if ec.ConvMem != nil {
 		toolCallID := ""
 		if inputMap, ok := input.(map[string]interface{}); ok {
 			if id, ok := inputMap["tool_call_id"].(string); ok {

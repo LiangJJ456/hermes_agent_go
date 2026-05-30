@@ -180,18 +180,6 @@ func NewAIAgent(cfg types.AgentConfig, router *model.Router, reg *registry.Regis
 // per-agent state on the global runner — pass the invoker/tracer through the
 // per-execution ExecutionContext into Run instead.
 func (a *AIAgent) wireRunners() {
-	if entry, ok := orchestrator.LookupNodeType("tool"); ok {
-		if r, ok := entry.Runner.(*orchrunner.ToolRunner); ok {
-			r.SetInvoker(a.toolInvoker)
-			// Wire tool-start event so users see "🔧 tool(...)" the moment a tool begins,
-			// not after it completes — critical for long-running tools.
-			r.OnToolStart = func(ctx context.Context, toolName, toolArgs string) {
-				if a.executor.Tracer != nil {
-					a.executor.Tracer.OnToolStart(ctx, toolName, toolArgs)
-				}
-			}
-		}
-	}
 	if entry, ok := orchestrator.LookupNodeType("parallel"); ok {
 		if r, ok := entry.Runner.(*orchrunner.ParallelRunner); ok {
 			r.SetExecutor(a.executor)
