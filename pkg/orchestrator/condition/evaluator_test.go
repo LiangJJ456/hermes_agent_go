@@ -50,6 +50,36 @@ func TestEvaluate_BooleanLiterals(t *testing.T) {
 	}
 }
 
+func TestEvaluate_Logical(t *testing.T) {
+	scope := Scope{
+		Input: map[string]interface{}{
+			"has_tool_calls":    true,
+			"needs_compression": false,
+			"count":             5,
+		},
+	}
+	cases := []struct {
+		expr string
+		want bool
+	}{
+		{"input.has_tool_calls && input.count > 3", true},
+		{"input.has_tool_calls && input.count > 9", false},
+		{"input.needs_compression || input.count == 5", true},
+		{"!input.needs_compression", true},
+		{"!input.has_tool_calls", false},
+		{"(input.has_tool_calls || input.needs_compression) && input.count < 3", false},
+	}
+	for _, c := range cases {
+		got, err := Evaluate(c.expr, scope)
+		if err != nil {
+			t.Fatalf("Evaluate(%q) error: %v", c.expr, err)
+		}
+		if got != c.want {
+			t.Fatalf("Evaluate(%q) = %v, want %v", c.expr, got, c.want)
+		}
+	}
+}
+
 func TestEvaluate_Comparisons(t *testing.T) {
 	scope := Scope{
 		Input: map[string]interface{}{

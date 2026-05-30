@@ -61,6 +61,8 @@ func evalNode(n ast.Expr, scope Scope) (interface{}, error) {
 		return evalBinary(node, scope)
 	case *ast.BasicLit:
 		return evalLit(node)
+	case *ast.UnaryExpr:
+		return evalUnary(node, scope)
 	default:
 		return nil, fmt.Errorf("unsupported expression: %T", n)
 	}
@@ -85,6 +87,17 @@ func evalSelector(node *ast.SelectorExpr, scope Scope) (interface{}, error) {
 func toStringMap(v interface{}) (map[string]interface{}, bool) {
 	m, ok := v.(map[string]interface{})
 	return m, ok
+}
+
+func evalUnary(node *ast.UnaryExpr, scope Scope) (interface{}, error) {
+	if node.Op != token.NOT {
+		return nil, fmt.Errorf("unsupported unary operator %q", node.Op)
+	}
+	v, err := evalNode(node.X, scope)
+	if err != nil {
+		return nil, err
+	}
+	return !truthy(v), nil
 }
 
 // truthy interprets a value in boolean context: real bools pass through,
@@ -132,6 +145,23 @@ func evalLit(node *ast.BasicLit) (interface{}, error) {
 
 func evalBinary(node *ast.BinaryExpr, scope Scope) (interface{}, error) {
 	switch node.Op {
+	case token.LAND, token.LOR:
+		l, err := evalNode(node.X, scope)
+		if err != nil {
+			return nil, err
+		}
+		lb := truthy(l)
+		if node.Op == token.LAND && !lb {
+			return false, nil
+		}
+		if node.Op == token.LOR && lb {
+			return true, nil
+		}
+		r, err := evalNode(node.Y, scope)
+		if err != nil {
+			return nil, err
+		}
+		return truthy(r), nil
 	case token.EQL, token.NEQ, token.LSS, token.GTR, token.LEQ, token.GEQ:
 		l, err := evalNode(node.X, scope)
 		if err != nil {
