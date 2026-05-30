@@ -120,7 +120,7 @@ func NewAIAgent(cfg types.AgentConfig, router *model.Router, reg *registry.Regis
 	// Build default graph
 	var graph *orchestrator.Graph
 	var err error
-	graph, err = BuildDefaultGraph(cfg)
+	graph, err = BuildGraph(cfg)
 	if err != nil {
 		// Fallback: minimal graph
 		graph = &orchestrator.Graph{
