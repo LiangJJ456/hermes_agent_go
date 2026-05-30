@@ -49,19 +49,37 @@ orchestrator 的节点 runner 通过 `orchestrator.RegisterNodeType` 注册为**
 
 ### `context` 包 — 服务契约
 
-新增 `pkg/orchestrator/context/services.go`,定义(从 `runner` 迁入):
+新增 `pkg/orchestrator/context/services.go`,从 `runner` 迁入服务接口**及其牵连的类型**。
+因为 `LLMInvoker` 的签名引用 `LLMMessage`/`LLMConfig`,这两个类型一并迁入(否则 `context`
+需 import `runner` → 成环)。`context` 新增 import `orchestrator`(取 `NodeResult`/`Graph`/
+`ExecutionSnapshot`)和 `trace`(Tracer 字段);二者均不反向 import `context`,无环。
+
+迁入 `context` 的完整集合:
+- 接口:`LLMInvoker`、`ToolInvoker`、`GraphExecutor`、`ContextGraphExecutor`
+- 类型:`LLMMessage`、`LLMConfig`(被 `LLMInvoker` 引用)
 
 ```go
-// LLMInvoker abstracts the actual LLM call.
-type LLMInvoker interface { /* 同现 runner.LLMInvoker */ }
+// 签名与现 runner 版本逐字一致：
+type LLMConfig struct { /* Model/SystemPrompt/UserPrompt/Tools/OutputSchema/Temperature/MaxTokens */ }
+type LLMMessage struct { /* Role/Content/Name/ToolCalls/ToolCallID */ }
 
-// ToolInvoker abstracts tool execution.
-type ToolInvoker interface { /* 同现 runner.ToolInvoker */ }
-
-// GraphExecutor runs a (sub)graph; ContextGraphExecutor adds ConvMem propagation.
-type GraphExecutor interface { /* 同现 runner.GraphExecutor */ }
-type ContextGraphExecutor interface { /* 同现 runner.ContextGraphExecutor */ }
+type LLMInvoker interface {
+	Chat(ctx context.Context, model string, messages []LLMMessage, tools []string, cfg LLMConfig) (*orchestrator.NodeResult, error)
+	ChatStream(ctx context.Context, model string, messages []LLMMessage, tools []string, cfg LLMConfig, onDelta func(string)) (*orchestrator.NodeResult, error)
+}
+type ToolInvoker interface {
+	Invoke(ctx context.Context, resource string, input interface{}, timeout uint) (*orchestrator.NodeResult, error)
+}
+type GraphExecutor interface {
+	Execute(ctx context.Context, g *orchestrator.Graph, input interface{}) (interface{}, *orchestrator.ExecutionSnapshot, error)
+}
+type ContextGraphExecutor interface {
+	GraphExecutor
+	ExecuteWithContext(ctx context.Context, g *orchestrator.Graph, ec *ExecutionContext) (interface{}, *orchestrator.ExecutionSnapshot, error)
+}
 ```
+
+> `StreamDeltaFunc`/`ToolStartFunc` 不迁移 —— 它们随 runner 函数字段一并删除(runner 直接调 `ec.Tracer`)。
 
 `ExecutionContext`(`execution.go`)新增服务字段:
 
@@ -81,13 +99,16 @@ type ExecutionContext struct {
 }
 ```
 
-`runner` 包保留别名以最小化改动:
+`runner` 包保留别名以最小化改动(`graph_builder.go` 等对 `runner.LLMConfig` 的引用、
+`RegisterNodeType("llm", ..., &LLMConfig{})` 均经别名透明工作):
 
 ```go
 type LLMInvoker = agcontext.LLMInvoker
 type ToolInvoker = agcontext.ToolInvoker
 type GraphExecutor = agcontext.GraphExecutor
 type ContextGraphExecutor = agcontext.ContextGraphExecutor
+type LLMMessage = agcontext.LLMMessage
+type LLMConfig = agcontext.LLMConfig
 ```
 
 ### runner 无状态化
