@@ -45,15 +45,3 @@ var (
 	ErrDBLocked        = errors.New("database locked after max retries")
 )
 
-// New creates a new error with the given message.
-func New(msg string) error {
-	return errors.New(msg)
-}
-
-// Wrap wraps an error with a message.
-func Wrap(err error, msg string) error {
-	if err == nil {
-		return nil
-	}
-	return errors.New(msg + ": " + err.Error())
-}

@@ -13,6 +13,7 @@ import (
 	"code.byted.org/ad_creative/hermes_agent_go/pkg/agent/memory"
 	"code.byted.org/ad_creative/hermes_agent_go/pkg/agent/prompt"
 	"code.byted.org/ad_creative/hermes_agent_go/pkg/errx"
+	"code.byted.org/ad_creative/hermes_agent_go/pkg/log"
 	"code.byted.org/ad_creative/hermes_agent_go/pkg/model"
 	"code.byted.org/ad_creative/hermes_agent_go/pkg/orchestrator"
 	"code.byted.org/ad_creative/hermes_agent_go/pkg/trace"
