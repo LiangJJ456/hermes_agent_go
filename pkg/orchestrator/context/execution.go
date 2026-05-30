@@ -1,5 +1,9 @@
 package context
 
+import (
+	"code.byted.org/ad_creative/hermes_agent_go/pkg/trace"
+)
+
 // ExecutionContext holds state for a single Graph execution.
 type ExecutionContext struct {
 	WorkMem        *WorkingMemory
@@ -7,6 +11,13 @@ type ExecutionContext struct {
 	TraceID        string
 	CurrentSpanID  string
 	DefinitionName string
+
+	// Per-execution services, stamped by the running Executor. Runners read
+	// these instead of holding their own (formerly global, racy) copies.
+	LLMInvoker  LLMInvoker
+	ToolInvoker ToolInvoker
+	Executor    GraphExecutor
+	Tracer      trace.Tracer
 }
 
 // WorkingMemory is the mutable state during Graph execution.
