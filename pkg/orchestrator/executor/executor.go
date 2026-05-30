@@ -14,7 +14,9 @@ import (
 
 // Executor walks a Graph, executing nodes and routing between them.
 type Executor struct {
-	Tracer trace.Tracer
+	Tracer      trace.Tracer
+	LLMInvoker  agcontext.LLMInvoker
+	ToolInvoker agcontext.ToolInvoker
 }
 
 // NewExecutor creates an executor with the given tracer.
@@ -85,6 +87,12 @@ func (e *Executor) Resume(ctx context.Context, g *orchestrator.Graph,
 // executeFrom is the internal loop starting from a given node.
 func (e *Executor) executeFrom(ctx context.Context, g *orchestrator.Graph,
 	startNode string, ec *agcontext.ExecutionContext, startStep int) (interface{}, *orchestrator.ExecutionSnapshot, error) {
+
+	// Inject per-execution services so stateless runners can read them from ec.
+	ec.LLMInvoker = e.LLMInvoker
+	ec.ToolInvoker = e.ToolInvoker
+	ec.Tracer = e.Tracer
+	ec.Executor = e
 
 	currentNode := startNode
 	step := startStep

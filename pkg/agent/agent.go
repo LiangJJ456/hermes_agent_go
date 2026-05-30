@@ -159,6 +159,9 @@ func NewAIAgent(cfg types.AgentConfig, router *model.Router, reg *registry.Regis
 		MemoryMgr: nil, // set after SetMemoryManager
 	}
 
+	a.executor.LLMInvoker = a.llmInvoker
+	a.executor.ToolInvoker = a.toolInvoker
+
 	// Wire invokers to runners
 	a.wireRunners()
 
