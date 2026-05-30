@@ -97,6 +97,10 @@ Use this when:
 The sub-agent has access to the same tools (except delegate_task, clarify, memory_save) 
 and will return its final result.
 
+CRITICAL — actually call this tool, never fake it:
+- To run a sub-agent you MUST call this tool and use its returned result. Never
+  claim a sub-agent ran, or fabricate its output, without calling the tool.
+
 Constraints:
 - Max delegation depth: 2 (parent → child → grandchild is rejected)
 - Sub-agent has independent iteration budget (default 50)
@@ -296,6 +300,15 @@ Use this when:
 - The task is long-running and you can continue responding to the user meanwhile
 
 Use delegate_task (sync) instead when you need the result before taking your next step.
+
+CRITICAL — actually call this tool, never fake it:
+- To start N background tasks, emit N separate delegate_task_async tool calls in
+  THIS turn — one per task. Three tasks = three tool calls.
+- A task is only running if THIS tool returned an ID for it. Real IDs look like
+  "task-1780164180194-2"; never invent readable IDs like "task-beijing".
+- Do NOT claim a task is "running in the background" or print a status table unless
+  you actually called this tool and received its ID. Running an echo/bash command
+  or describing the tasks does NOT start anything.
 
 Constraints:
 - Max delegation depth: 2 (cannot be called by a child agent)
