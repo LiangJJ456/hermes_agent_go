@@ -2,11 +2,12 @@ package orchestrator
 
 import (
 	"fmt"
+	"sort"
 	"sync"
 )
 
 type nodeTypeEntry struct {
-	Runner         NodeRunner
+	Runner          NodeRunner
 	ConfigPrototype interface{}
 }
 
@@ -37,4 +38,16 @@ func MustLookupNodeType(name string) *nodeTypeEntry {
 		panic(fmt.Sprintf("node type %q not registered", name))
 	}
 	return e
+}
+
+// ListNodeTypes returns the names of all registered node types, sorted.
+func ListNodeTypes() []string {
+	mu.RLock()
+	defer mu.RUnlock()
+	names := make([]string, 0, len(registry))
+	for name := range registry {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
 }
