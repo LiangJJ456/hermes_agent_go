@@ -21,7 +21,8 @@ func containsStr(s []string, v string) bool {
 	return false
 }
 
-func TestListNodeTypes_SortedAndComplete(t *testing.T) {
+// Registry is process-global, so this asserts sorting and membership, not exhaustiveness.
+func TestListNodeTypes_SortedAndContainsRegistered(t *testing.T) {
 	RegisterNodeType("zeta", stubRunner{}, nil)
 	RegisterNodeType("alpha", stubRunner{}, nil)
 
