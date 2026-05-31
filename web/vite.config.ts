@@ -4,6 +4,10 @@ import react from '@vitejs/plugin-react';
 
 export default defineConfig({
   plugins: [react()],
+  // NOTE: outDir is the Go embed dir (pkg/grapheditor/static). emptyOutDir wipes
+  // it on every build — including the committed placeholder index.html — and
+  // replaces it with the bundle. CI/Makefile must run `npm run build` before
+  // `go build` on a clean checkout (handled in the build/embed task).
   build: {
     outDir: '../pkg/grapheditor/static',
     emptyOutDir: true,
