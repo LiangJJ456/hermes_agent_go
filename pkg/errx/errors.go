@@ -44,3 +44,4 @@ var (
 	ErrSessionNotFound = errors.New("session not found")
 	ErrDBLocked        = errors.New("database locked after max retries")
 )
+

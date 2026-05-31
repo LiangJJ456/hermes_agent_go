@@ -83,6 +83,9 @@ func LoadConfig() AgentConfig {
 	if v := os.Getenv("HERMES_WORKDIR"); v != "" {
 		cfg.WorkDir = v
 	}
+	if v := os.Getenv("HERMES_GRAPH"); v != "" {
+		cfg.GraphPath = v
+	}
 	if os.Getenv("HERMES_SKIP_MEMORY") == "1" {
 		cfg.SkipMemory = true
 	}
@@ -219,6 +222,9 @@ func mergeConfig(dst, src *AgentConfig) {
 	}
 	if src.WorkDir != "" {
 		dst.WorkDir = src.WorkDir
+	}
+	if src.GraphPath != "" {
+		dst.GraphPath = src.GraphPath
 	}
 	if src.SkipMemory {
 		dst.SkipMemory = true

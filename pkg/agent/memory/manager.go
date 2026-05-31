@@ -132,14 +132,28 @@ func (m *Manager) BuildSystemPrompt() string {
 	return strings.Join(blocks, "\n\n")
 }
 
-// PrefetchAll 收集所有 Provider 的预取上下文
+// maxPrefetchChars 限制 PrefetchAll 返回的总字符数，避免记忆上下文过长挤压对话窗口
+const maxPrefetchChars = 4000
+
+// PrefetchAll 收集所有 Provider 的预取上下文，总长度不超过 maxPrefetchChars
 func (m *Manager) PrefetchAll(ctx context.Context, query, sessionID string) string {
 	var parts []string
+	totalLen := 0
 	for _, p := range m.providers {
 		result := p.Prefetch(ctx, query, sessionID)
-		if strings.TrimSpace(result) != "" {
-			parts = append(parts, result)
+		result = strings.TrimSpace(result)
+		if result == "" {
+			continue
 		}
+		if totalLen+len(result) > maxPrefetchChars {
+			remaining := maxPrefetchChars - totalLen
+			if remaining > 100 {
+				parts = append(parts, result[:remaining]+"\n... [truncated]")
+			}
+			break
+		}
+		parts = append(parts, result)
+		totalLen += len(result)
 	}
 	return strings.Join(parts, "\n\n")
 }

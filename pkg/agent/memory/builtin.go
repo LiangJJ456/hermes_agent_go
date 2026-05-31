@@ -14,10 +14,7 @@ import (
 // 基于 MEMORY.md + USER.md 文件存储
 type BuiltinProvider struct {
 	store *Store
-
-	mu            sync.Mutex
-	prefetchCache string // 缓存的预取内容
-	prefetchReady bool   // 是否有待消费的预取结果
+	mu    sync.Mutex
 }
 
 // NewBuiltinProvider 创建内建 Provider
@@ -61,32 +58,26 @@ func (p *BuiltinProvider) SystemPromptBlock() string {
 	return result
 }
 
-// Prefetch 返回缓存的预取内容，若无缓存则从当前 store 状态构建
+// Prefetch 返回 builtin 记忆的全量内容（memory + user）。
+// Builtin 存储有 charLimit 限额（~3500 chars），体量小，全量注入不浪费 token。
+// 每轮从磁盘 reload 以捕获其他会话的写入。
 func (p *BuiltinProvider) Prefetch(_ context.Context, _ string, _ string) string {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	if p.prefetchReady {
-		content := p.prefetchCache
-		p.prefetchReady = false
-		p.prefetchCache = ""
-		return content
-	}
-
-	// 无缓存，从当前磁盘状态构建
-	return p.buildPrefetchContent()
-}
-
-// QueuePrefetch 异步预取：从磁盘重新加载并缓存结果供下次 Prefetch 消费
-func (p *BuiltinProvider) QueuePrefetch(_ string, _ string) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-
-	// 从磁盘重新加载最新状态（捕获其他会话的写入）
+	// 从磁盘重新加载最新状态（捕获其他会话/tool call 的写入）
 	_ = p.store.LoadFromDisk()
 
-	p.prefetchCache = p.buildPrefetchContent()
-	p.prefetchReady = p.prefetchCache != ""
+	return p.buildAllContent()
+}
+
+// QueuePrefetch 异步预加载磁盘最新状态（供下次 Prefetch 使用）
+func (p *BuiltinProvider) QueuePrefetch(_ string, _ string) {
+	go func() {
+		p.mu.Lock()
+		defer p.mu.Unlock()
+		_ = p.store.LoadFromDisk()
+	}()
 }
 
 // SyncTurn 每轮结束后持久化 —— 内建 Provider 的写入在 tool call 时已实时落盘，
@@ -262,8 +253,9 @@ func (p *BuiltinProvider) Shutdown() {
 
 // ── 内部辅助 ──
 
-// buildPrefetchContent 从当前 store 状态构建预取内容
-func (p *BuiltinProvider) buildPrefetchContent() string {
+// buildAllContent 返回 memory + user 全部条目。
+// Builtin 有 charLimit 限制，条目总量不大，全量返回即可。
+func (p *BuiltinProvider) buildAllContent() string {
 	var parts []string
 
 	memEntries := p.store.Read("memory")

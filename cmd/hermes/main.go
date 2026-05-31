@@ -8,12 +8,15 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
 	"os/signal"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -35,8 +38,9 @@ import (
 )
 
 func main() {
-	// 日志级别
-	logLevel := slog.LevelInfo
+	// 日志级别：默认 Warn，避免 span.end / 子 agent 等 INFO 日志刷屏与流式输出混杂。
+	// 设 HERMES_DEBUG=1 可看到完整 Debug 日志。
+	logLevel := slog.LevelWarn
 	if os.Getenv("HERMES_DEBUG") == "1" {
 		logLevel = slog.LevelDebug
 	}
@@ -153,7 +157,11 @@ func main() {
 	}
 
 	// 创建 Agent
-	ag := agent.NewAIAgent(cfg, router, reg)
+	ag, err := agent.NewAIAgent(cfg, router, reg)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "❌ Failed to initialize agent: %v\n", err)
+		os.Exit(1)
+	}
 
 	// ── 初始化 TODO 规划系统 ──
 	todoStore := builtin.NewTodoStore()
@@ -205,6 +213,9 @@ func main() {
 	delegateProvider := delegate.NewProvider(ag, 3)
 	if err := delegateProvider.Register(); err != nil {
 		fmt.Fprintf(os.Stderr, "⚠️  delegate_task register: %v\n", err)
+	}
+	if err := delegateProvider.RegisterAsync(); err != nil {
+		fmt.Fprintf(os.Stderr, "⚠️  delegate_task_async register: %v\n", err)
 	}
 
 	// ── 初始化 MCP 服务 ──
@@ -266,14 +277,20 @@ func main() {
 	}
 
 	// 设置事件回调（CLI 输出）
+	streamedThisTurn := false
 	ag.SetEventCallback(func(e agent.Event) {
+		label := ""
+		if e.FromSubAgent {
+			label = "[子Agent] "
+		}
 		switch e.Type {
 		case agent.EventToolStart:
-			fmt.Fprintf(os.Stderr, "  🔧 %s(%s)\n", e.ToolName, truncate(e.ToolArgs, 80))
+			fmt.Fprintf(os.Stderr, "  🔧 %s%s(%s)\n", label, e.ToolName, truncate(e.ToolArgs, 80))
 		case agent.EventToolEnd:
-			fmt.Fprintf(os.Stderr, "  ✓ %s\n", e.ToolName)
+			fmt.Fprintf(os.Stderr, "  ✓ %s%s\n", label, e.ToolName)
 		case agent.EventStreamDelta:
 			fmt.Print(e.Content)
+			streamedThisTurn = true
 		case agent.EventCompression:
 			fmt.Fprintf(os.Stderr, "  📦 %s\n", e.Content)
 		case agent.EventBudgetWarn:
@@ -287,11 +304,9 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-	go func() {
-		<-sigCh
-		fmt.Fprintf(os.Stderr, "\n🛑 Interrupted\n")
+	// doShutdown is idempotent: safe to call from the signal handler and /quit.
+	doShutdown := sync.OnceFunc(func() {
+		persistMessages(sessionDB, sessionID, ag)
 		if mcpMgr != nil {
 			mcpMgr.ShutdownAll()
 		}
@@ -299,7 +314,33 @@ func main() {
 		if sessionDB != nil {
 			sessionDB.Close()
 		}
-		cancel()
+	})
+
+	// runCancel holds the cancel func for the currently-executing ag.Run call.
+	// SIGINT calls it to interrupt only the current run, leaving the REPL alive.
+	var runCancel atomic.Pointer[context.CancelFunc]
+
+	sigCh := make(chan os.Signal, 2)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	go func() {
+		for sig := range sigCh {
+			if sig == syscall.SIGTERM {
+				fmt.Fprintf(os.Stderr, "\n🛑 Terminated\n")
+				doShutdown()
+				cancel()
+				return
+			}
+			// SIGINT: cancel current run if active; otherwise exit.
+			if fn := runCancel.Load(); fn != nil {
+				(*fn)()
+				fmt.Fprintf(os.Stderr, "\n⚠️  Run interrupted (Ctrl+C again to exit)\n>>> ")
+			} else {
+				fmt.Fprintf(os.Stderr, "\n🛑 Interrupted\n")
+				doShutdown()
+				cancel()
+				return
+			}
+		}
 	}()
 
 	// REPL 循环
@@ -308,70 +349,153 @@ func main() {
 	fmt.Printf("   Session: %s\n", sessionID)
 	fmt.Printf("   Memory: %s/memories\n\n", hermesHome)
 
-	scanner := bufio.NewScanner(os.Stdin)
+	stdinCh := make(chan string, 1)
+	go func() {
+		scanner := bufio.NewScanner(os.Stdin)
+		for scanner.Scan() {
+			stdinCh <- scanner.Text()
+		}
+		close(stdinCh)
+	}()
+
+	type agentResult struct {
+		reply  string
+		err    error
+		prefix string
+	}
+	type pendingRun struct {
+		input  string
+		prefix string
+	}
+
+	// runDoneCh receives the result of the background ag.Run goroutine.
+	// Buffer 1 ensures the goroutine never blocks even if the main loop has exited.
+	runDoneCh := make(chan agentResult, 1)
+	var pending []pendingRun
+	isRunning := false
+
+	startRun := func(input, prefix string) {
+		isRunning = true
+		streamedThisTurn = false
+		runCtx, cancelRun := context.WithCancel(ctx)
+		runCancel.Store(&cancelRun)
+		go func() {
+			reply, _, err := ag.Run(runCtx, input)
+			runCancel.Store(nil)
+			cancelRun()
+			runDoneCh <- agentResult{reply, err, prefix}
+		}()
+	}
+
+	fmt.Print(">>> ")
 	for {
-		fmt.Print(">>> ")
-		if !scanner.Scan() {
-			break
-		}
-		input := strings.TrimSpace(scanner.Text())
-		if input == "" {
-			continue
-		}
-		if input == "/quit" || input == "/exit" {
-			if mcpMgr != nil {
-				mcpMgr.ShutdownAll()
+		select {
+		case line, ok := <-stdinCh:
+			if !ok {
+				return // stdin closed
 			}
-			persistMessages(sessionDB, sessionID, ag)
-			ag.Shutdown()
-			if sessionDB != nil {
-				sessionDB.Close()
+			input := strings.TrimSpace(line)
+			if input == "" {
+				if !isRunning {
+					fmt.Print(">>> ")
+				}
+				continue
 			}
-			fmt.Println("👋 Bye!")
-			break
-		}
-		if input == "/stats" {
-			stats := ag.GetStats()
-			fmt.Printf("  Iterations: %d | Tool calls: %d | Tokens: %d in / %d out\n",
-				stats.TotalIterations, stats.ToolCalls, stats.InputTokens, stats.OutputTokens)
-			continue
-		}
-		if input == "/budget" {
-			fmt.Printf("  Budget: %d/%d remaining\n", ag.Budget().Remaining(), ag.Budget().Max())
-			continue
-		}
-		if input == "/todo" {
-			items := todoStore.Read()
-			if len(items) == 0 {
-				fmt.Println("  (no TODO list)")
+			if handleReplCommand(input, ag, todoStore, mcpMgr, doShutdown, cancel) {
+				if !isRunning {
+					fmt.Print(">>> ")
+				}
+				continue
+			}
+			if isRunning {
+				pending = append(pending, pendingRun{input, ""})
+				fmt.Fprintf(os.Stderr, "  ⌛ 已排队，等待当前任务完成 (Ctrl+C 可中断)\n")
 			} else {
-				fmt.Println(todoStore.Summary())
+				startRun(input, "")
 			}
-			continue
-		}
-		if input == "/mcp" {
-			if mcpMgr == nil {
-				fmt.Println("  No MCP servers configured")
+
+		case result := <-runDoneCh:
+			isRunning = false
+			if result.err != nil && errors.Is(result.err, context.Canceled) {
+				// Interrupted: discard queued inputs so stale commands don't replay.
+				pending = pending[:0]
+				fmt.Fprintln(os.Stderr)
+				fmt.Print(">>> ")
 			} else {
-				for _, s := range mcpMgr.GetStatus() {
-					st := "ready"
-					if s.Error != "" {
-						st = "error: " + s.Error
-					}
-					fmt.Printf("  [%s] %s (%s) — %d tools\n",
-						s.Transport, s.Name, st, len(s.Tools))
+				if result.err != nil {
+					fmt.Fprintf(os.Stderr, "\n%s❌ Error: %v\n", result.prefix, result.err)
+				} else if !streamedThisTurn && result.reply != "" {
+					fmt.Printf("%s%s\n", result.prefix, result.reply)
+				} else {
+					fmt.Println()
+				}
+				if len(pending) > 0 {
+					next := pending[0]
+					pending = pending[1:]
+					startRun(next.input, next.prefix)
+				} else {
+					fmt.Print(">>> ")
 				}
 			}
-			continue
-		}
 
-		_, err := ag.Run(ctx, input)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "\n❌ Error: %v\n", err)
-			continue
+		case <-ag.NotifCh():
+			if isRunning {
+				pending = append(pending, pendingRun{"", "[async] "})
+			} else {
+				startRun("", "[async] ")
+			}
+
+		case <-ctx.Done():
+			return
 		}
-		fmt.Println()
 	}
+}
+
+// handleReplCommand processes slash commands. Returns true if input was a command.
+// shutdown and cancel are called together for /quit so the select loop exits via ctx.Done().
+func handleReplCommand(
+	input string,
+	ag *agent.AIAgent,
+	todoStore *builtin.TodoStore,
+	mcpMgr *mcp.Manager,
+	shutdown func(),
+	cancel context.CancelFunc,
+) bool {
+	switch input {
+	case "/quit", "/exit":
+		fmt.Println("👋 Bye!")
+		shutdown()
+		cancel()
+	case "/stats":
+		stats := ag.GetStats()
+		fmt.Printf("  Iterations: %d | Tool calls: %d | Tokens: %d in / %d out\n",
+			stats.TotalIterations, stats.ToolCalls, stats.InputTokens, stats.OutputTokens)
+	case "/budget":
+		fmt.Println("  Budget tracking: managed by graph executor (MaxSteps = cfg.MaxIterations)")
+	case "/todo":
+		items := todoStore.Read()
+		if len(items) == 0 {
+			fmt.Println("  (no TODO list)")
+		} else {
+			fmt.Println(todoStore.Summary())
+		}
+	case "/mcp":
+		if mcpMgr == nil {
+			fmt.Println("  No MCP servers configured")
+		} else {
+			for _, s := range mcpMgr.GetStatus() {
+				st := "ready"
+				if s.Error != "" {
+					st = "error: " + s.Error
+				}
+				fmt.Printf("  [%s] %s (%s) — %d tools\n",
+					s.Transport, s.Name, st, len(s.Tools))
+			}
+		}
+	default:
+		return false
+	}
+	return true
 }
 
 // persistMessages 持久化消息历史到 SessionDB

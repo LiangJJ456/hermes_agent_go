@@ -1,0 +1,37 @@
+* { box-sizing: border-box; }
+html, body, #root { height: 100%; margin: 0; font-family: system-ui, sans-serif; }
+.app { display: flex; flex-direction: column; height: 100vh; }
+.toolbar { display: flex; gap: 8px; align-items: center; padding: 8px 12px; border-bottom: 1px solid #ddd; }
+.toolbar button { padding: 4px 12px; cursor: pointer; }
+.errcount { margin-left: auto; color: #555; }
+.errcount-bad { color: #dc2626; font-weight: 600; }
+.main { display: flex; flex: 1; min-height: 0; }
+.palette { width: 120px; border-right: 1px solid #ddd; padding: 8px; }
+.palette-title { font-size: 12px; text-transform: uppercase; color: #888; margin-bottom: 6px; }
+.palette-item { padding: 6px 8px; margin-bottom: 6px; border: 1px solid #ccc; border-radius: 6px; cursor: grab; background: #f7f7f7; }
+.canvas-wrap { flex: 1; min-width: 0; }
+.rightpane { width: 280px; border-left: 1px solid #ddd; display: flex; flex-direction: column; overflow: auto; }
+.inspector, .errorpanel { padding: 10px; }
+.inspector-title { font-weight: 600; margin-bottom: 8px; }
+.inspector-empty, .errorpanel-empty { color: #999; padding: 10px; }
+.field { display: flex; flex-direction: column; gap: 2px; margin-bottom: 8px; font-size: 13px; }
+.field input, .field textarea { width: 100%; padding: 4px; }
+.field-bool { flex-direction: row; align-items: center; gap: 6px; }
+.field-error { color: #dc2626; font-size: 12px; }
+.taglist { list-style: none; padding: 0; margin: 4px 0; display: flex; flex-wrap: wrap; gap: 4px; }
+.taglist li { background: #eee; border-radius: 4px; padding: 2px 6px; }
+.hint { font-size: 11px; color: #888; }
+.errorpanel { border-top: 1px solid #eee; }
+.errorrow { border-left: 3px solid #dc2626; background: #fef2f2; padding: 4px 8px; margin-bottom: 6px; cursor: pointer; }
+.errorrow-path { font-size: 11px; color: #888; }
+.nodecard { background: #fff; border: 2px solid #6b7280; border-radius: 8px; min-width: 120px; font-size: 12px; position: relative; }
+.nodecard-head { color: #fff; padding: 4px 8px; border-radius: 6px 6px 0 0; display: flex; gap: 6px; align-items: center; }
+.nodecard-id { font-weight: 600; }
+.nodecard-type { opacity: 0.85; font-size: 10px; text-transform: uppercase; }
+.nodecard-start { margin-left: auto; }
+.nodecard-summary { padding: 4px 8px; color: #444; }
+.nodecard-badge { position: absolute; top: -8px; right: -8px; background: #dc2626; color: #fff; border-radius: 50%; width: 18px; height: 18px; display: flex; align-items: center; justify-content: center; font-size: 11px; }
+.modal-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,0.4); display: flex; align-items: center; justify-content: center; }
+.modal { background: #fff; padding: 16px; border-radius: 8px; width: 520px; max-width: 90vw; }
+.modal textarea { width: 100%; font-family: monospace; }
+.modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 8px; }

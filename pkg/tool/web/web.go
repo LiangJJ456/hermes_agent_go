@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"time"
 
@@ -119,7 +120,7 @@ func (w *WebTool) ScrapeWebPage(urlStr string, selector string) (map[string]inte
 		return nil, err
 	}
 
-	statusCode := resp["status_code"].(int)
+	statusCode, _ := resp["status_code"].(int)
 	if statusCode < 200 || statusCode >= 300 {
 		return nil, errx.New(fmt.Sprintf("request failed with status %d", statusCode))
 	}
@@ -166,7 +167,7 @@ func (w *WebTool) ScrapeWebPage(urlStr string, selector string) (map[string]inte
 	return result, nil
 }
 
-// DownloadFile 下载文件
+// DownloadFile downloads a file and saves it to the specified path.
 func (w *WebTool) DownloadFile(urlStr string, savePath string) (map[string]interface{}, error) {
 	resp, err := w.client.Get(urlStr)
 	if err != nil {
@@ -178,14 +179,22 @@ func (w *WebTool) DownloadFile(urlStr string, savePath string) (map[string]inter
 		return nil, errx.New(fmt.Sprintf("download failed with status %d", resp.StatusCode))
 	}
 
-	// 创建文件
-	// 注意：这里需要实现文件写入逻辑，需要导入os包
-	// 为了简化，这里返回成功信息，实际实现需要添加文件写入
-	
+	f, err := os.Create(savePath)
+	if err != nil {
+		return nil, errx.Wrap(err, "failed to create file")
+	}
+	defer f.Close()
+
+	written, err := io.Copy(f, resp.Body)
+	if err != nil {
+		return nil, errx.Wrap(err, "failed to write file")
+	}
+
 	result := make(map[string]interface{})
 	result["url"] = urlStr
 	result["save_path"] = savePath
 	result["status"] = "success"
+	result["bytes_written"] = written
 	result["content_length"] = resp.ContentLength
 
 	return result, nil

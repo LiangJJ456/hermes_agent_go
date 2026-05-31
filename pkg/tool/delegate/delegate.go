@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"code.byted.org/ad_creative/hermes_agent_go/pkg/agent"
@@ -12,6 +13,10 @@ import (
 	"code.byted.org/ad_creative/hermes_agent_go/pkg/tool/registry"
 	"code.byted.org/ad_creative/hermes_agent_go/pkg/types"
 )
+
+// asyncTaskCounter makes task IDs unique even when multiple async delegates
+// are dispatched within the same millisecond (e.g. parallel tool calls).
+var asyncTaskCounter atomic.Uint64
 
 // delegateArgs delegate_task 工具参数
 type delegateArgs struct {
@@ -39,6 +44,43 @@ func NewProvider(parentAgent *agent.AIAgent, maxParallel int) *Provider {
 	}
 }
 
+// buildFullTask assembles the complete task prompt from delegate arguments.
+func buildFullTask(args delegateArgs) string {
+	fullTask := args.Task
+	if args.Context != "" {
+		fullTask += "\n\n## Context\n" + args.Context
+	}
+	if args.Constraints != "" {
+		fullTask += "\n\n## Constraints\n" + args.Constraints
+	}
+	return fullTask
+}
+
+// buildTaskNotification formats a completed (or failed) child-agent result as
+// an XML <task-notification> block that the parent LLM can parse.
+func buildTaskNotification(taskID, task, result string, err error, elapsed time.Duration, stats agent.Stats) string {
+	status := "completed"
+	if err != nil {
+		status = "failed"
+		result = err.Error()
+	}
+	return fmt.Sprintf(`<task-notification>
+<task-id>%s</task-id>
+<status>%s</status>
+<task>%s</task>
+<elapsed>%s</elapsed>
+<iterations>%d</iterations>
+<tool-calls>%d</tool-calls>
+<result>%s</result>
+</task-notification>`,
+		taskID, status, task,
+		elapsed.Round(time.Millisecond).String(),
+		stats.TotalIterations,
+		stats.ToolCalls,
+		result,
+	)
+}
+
 // Register 注册 delegate_task 工具到全局 Registry
 func (p *Provider) Register() error {
 	schema := types.ToolSchema{
@@ -54,6 +96,10 @@ Use this when:
 
 The sub-agent has access to the same tools (except delegate_task, clarify, memory_save) 
 and will return its final result.
+
+CRITICAL — actually call this tool, never fake it:
+- To run a sub-agent you MUST call this tool and use its returned result. Never
+  claim a sub-agent ran, or fabricate its output, without calling the tool.
 
 Constraints:
 - Max delegation depth: 2 (parent → child → grandchild is rejected)
@@ -109,14 +155,7 @@ func (p *Provider) handle(ctx context.Context, rawArgs json.RawMessage) (string,
 		return "", fmt.Errorf("create child agent: %w", err)
 	}
 
-	// 组装完整的任务描述
-	fullTask := args.Task
-	if args.Context != "" {
-		fullTask += "\n\n## Context\n" + args.Context
-	}
-	if args.Constraints != "" {
-		fullTask += "\n\n## Constraints\n" + args.Constraints
-	}
+	fullTask := buildFullTask(args)
 
 	log.Info("delegating task to child agent",
 		"task_preview", truncate(args.Task, 100),
@@ -126,7 +165,7 @@ func (p *Provider) handle(ctx context.Context, rawArgs json.RawMessage) (string,
 	start := time.Now()
 
 	// 运行子 Agent
-	result, err := child.Run(ctx, fullTask)
+	result, _, err := child.Run(ctx, fullTask)
 	if err != nil {
 		elapsed := time.Since(start)
 		log.Warn("child agent failed",
@@ -187,6 +226,124 @@ func (p *Provider) BatchDelegate(ctx context.Context, tasks []delegateArgs) []st
 
 	wg.Wait()
 	return results
+}
+
+// handleAsync executes a child agent in a background goroutine and returns
+// immediately with a task ID. The child's result is delivered via AddNotification.
+func (p *Provider) handleAsync(ctx context.Context, rawArgs json.RawMessage) (string, error) {
+	var args delegateArgs
+	if err := json.Unmarshal(rawArgs, &args); err != nil {
+		return "", fmt.Errorf("invalid arguments: %w", err)
+	}
+	if args.Task == "" {
+		return "", fmt.Errorf("task description is required")
+	}
+
+	taskID := fmt.Sprintf("task-%d-%d", time.Now().UnixMilli(), asyncTaskCounter.Add(1))
+
+	child, err := p.parentAgent.NewChildAgent(args.Task)
+	if err != nil {
+		return "", fmt.Errorf("create child agent: %w", err)
+	}
+
+	fullTask := buildFullTask(args)
+
+	log.Info("dispatching async child agent",
+		"task_id", taskID,
+		"task_preview", truncate(args.Task, 100),
+		"depth", child.Depth(),
+	)
+
+	// context.Background() is intentional: the child must outlive the parent's
+	// turn context (which is cancelled when the tool call returns).
+	go func() {
+		start := time.Now()
+		var result string
+		var runErr error
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					runErr = fmt.Errorf("child agent panicked: %v", r)
+				}
+			}()
+			result, _, runErr = child.Run(context.Background(), fullTask)
+		}()
+		stats := child.GetStats()
+		xml := buildTaskNotification(taskID, args.Task, result, runErr, time.Since(start), stats)
+		p.parentAgent.AddNotification(xml)
+		log.Info("async child agent finished",
+			"task_id", taskID,
+			"elapsed", time.Since(start).Round(time.Millisecond),
+			"iterations", stats.TotalIterations,
+			"tool_calls", stats.ToolCalls,
+		)
+	}()
+
+	return fmt.Sprintf(
+		`Task "%s" started (id: %s). Running in background — you will receive a <task-notification> when complete.`,
+		truncate(args.Task, 80), taskID,
+	), nil
+}
+
+// RegisterAsync registers the delegate_task_async tool with the global registry.
+func (p *Provider) RegisterAsync() error {
+	schema := types.ToolSchema{
+		Type: "function",
+		Function: types.FunctionSchema{
+			Name: "delegate_task_async",
+			Description: `Delegate a task to a sub-agent running in the background. Returns immediately with a task ID.
+The sub-agent runs independently; you will receive a <task-notification> message when it completes.
+
+Use this when:
+- The task is independent and does not block your current reasoning
+- You want to run multiple sub-tasks in parallel
+- The task is long-running and you can continue responding to the user meanwhile
+
+Use delegate_task (sync) instead when you need the result before taking your next step.
+
+CRITICAL — actually call this tool, never fake it:
+- To start N background tasks, emit N separate delegate_task_async tool calls in
+  THIS turn — one per task. Three tasks = three tool calls.
+- A task is only running if THIS tool returned an ID for it. Real IDs look like
+  "task-1780164180194-2"; never invent readable IDs like "task-beijing".
+- Do NOT claim a task is "running in the background" or print a status table unless
+  you actually called this tool and received its ID. Running an echo/bash command
+  or describing the tasks does NOT start anything.
+
+Constraints:
+- Max delegation depth: 2 (cannot be called by a child agent)
+- Sub-agent cannot interact with the user directly`,
+			Parameters: json.RawMessage(`{
+				"type": "object",
+				"properties": {
+					"task": {
+						"type": "string",
+						"description": "Clear, self-contained description of what the sub-agent should accomplish"
+					},
+					"context": {
+						"type": "string",
+						"description": "Additional context: file paths, variable values, background info the sub-agent needs"
+					},
+					"constraints": {
+						"type": "string",
+						"description": "Specific constraints or requirements: output format, scope boundaries"
+					}
+				},
+				"required": ["task"],
+				"additionalProperties": false
+			}`),
+		},
+	}
+
+	return registry.Register(&registry.ToolEntry{
+		Name:          "delegate_task_async",
+		Toolset:       "agent",
+		Schema:        schema,
+		Handler:       p.handleAsync,
+		ParallelSafe:  true,
+		NeverParallel: false,
+		MaxResultSize: 512,
+	})
 }
 
 func truncate(s string, n int) string {

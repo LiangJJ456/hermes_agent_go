@@ -157,36 +157,67 @@ func (p *Provider) SystemPromptBlock() string {
 	return wakeUp
 }
 
+// Prefetch 参数约束
+const (
+	prefetchScoreThreshold = 0.5  // 最低召回分数
+	prefetchMaxResults     = 3    // 最多返回条目
+	prefetchMaxChars       = 1200 // 最大字符数
+)
+
 // Prefetch searches the palace for context relevant to the current query.
+// 使用 BM25 + 向量混合搜索，按分数阈值过滤，限制返回结果数和字符数。
 func (p *Provider) Prefetch(_ context.Context, query string, _ string) string {
 	if p.stack == nil || query == "" {
 		return ""
 	}
 
-	// L3 search for relevant memories
-	results := p.stack.L3.SearchRaw(query, "", "", 3)
+	// L3 hybrid search，多取一些再按分数过滤
+	results := p.stack.L3.SearchRaw(query, "", "", prefetchMaxResults*2)
 	if len(results) == 0 {
 		return ""
 	}
 
+	// Filter by score threshold
+	var filtered []SearchResult
+	for _, r := range results {
+		if r.Score >= prefetchScoreThreshold {
+			filtered = append(filtered, r)
+		}
+	}
+	if len(filtered) == 0 {
+		return ""
+	}
+	if len(filtered) > prefetchMaxResults {
+		filtered = filtered[:prefetchMaxResults]
+	}
+
+	// Build output with char limit
 	var parts []string
 	parts = append(parts, "## Palace Recall (relevant memories)")
-	for _, r := range results {
+	totalChars := 0
+	for _, r := range filtered {
 		snippet := strings.TrimSpace(r.Drawer.Content)
 		if len(snippet) > 300 {
 			snippet = snippet[:297] + "..."
 		}
-		scoreInfo := fmt.Sprintf("%.3f", r.Score)
+		if totalChars+len(snippet) > prefetchMaxChars {
+			break
+		}
+		totalChars += len(snippet)
+		scoreInfo := fmt.Sprintf("%.2f", r.Score)
 		if r.VectorScore > 0 {
-			scoreInfo += fmt.Sprintf(" vec=%.3f", r.VectorScore)
+			scoreInfo += fmt.Sprintf(" vec=%.2f", r.VectorScore)
 		}
 		parts = append(parts, fmt.Sprintf("  [%s/%s] (score=%s) %s",
 			r.Drawer.Wing, r.Drawer.Room, scoreInfo, snippet))
 	}
+	if len(parts) <= 1 {
+		return ""
+	}
 
 	// Also check KG for any entity mentioned in query
 	kgContext := p.searchKGForQuery(query)
-	if kgContext != "" {
+	if kgContext != "" && totalChars+len(kgContext) <= prefetchMaxChars {
 		parts = append(parts, "", kgContext)
 	}
 
