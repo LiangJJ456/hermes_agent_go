@@ -57,6 +57,7 @@ export function Canvas({ nodes, edges, onNodesChange, onEdgesChange, onConnect, 
         onEdgesChange={onEdgesChange}
         onConnect={onConnect}
         onSelectionChange={onSelectionChange}
+        deleteKeyCode={['Delete', 'Backspace']}
         fitView
       >
         <Background />

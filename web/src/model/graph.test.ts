@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { toWire, fromWire } from './graph';
+import { toWire, fromWire, removeSelection } from './graph';
 import type { WireGraph } from './types';
 
 const wire: WireGraph = {
@@ -47,5 +47,24 @@ describe('graph conversion', () => {
     const out = toWire(nodes, edges);
     const e0 = out.Edges.find((e) => e.From === 'classify')!;
     expect('Condition' in e0).toBe(false);
+  });
+});
+
+describe('removeSelection', () => {
+  it('deletes a node and every edge touching it', () => {
+    const { nodes, edges } = fromWire(wire);
+    const out = removeSelection(nodes, edges, { kind: 'node', id: 'route' });
+    expect(out.nodes.map((n) => n.id).sort()).toEqual(['classify', 'done']);
+    // route had edges classify->route and route->done; both gone.
+    expect(out.edges).toHaveLength(0);
+  });
+
+  it('deletes a single edge and leaves nodes intact', () => {
+    const { nodes, edges } = fromWire(wire);
+    const target = edges.find((e) => e.source === 'classify')!;
+    const out = removeSelection(nodes, edges, { kind: 'edge', id: target.id });
+    expect(out.nodes).toHaveLength(3);
+    expect(out.edges.map((e) => e.id)).not.toContain(target.id);
+    expect(out.edges).toHaveLength(1);
   });
 });

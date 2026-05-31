@@ -1,7 +1,7 @@
 import { useCallback, useState } from 'react';
 import { ReactFlowProvider, useNodesState, useEdgesState, addEdge, applyNodeChanges, type Connection, type NodeChange, type EdgeChange } from '@xyflow/react';
 import { validateGraph } from './api/client';
-import { toWire, fromWire, type EditorNode, type EditorEdge } from './model/graph';
+import { toWire, fromWire, removeSelection, type EditorNode, type EditorEdge } from './model/graph';
 import { autoLayout } from './model/layout';
 import { mapError, type ErrorTarget } from './model/errors';
 import type { WireGraph } from './model/types';
@@ -65,6 +65,14 @@ export function EditorShell() {
     URL.revokeObjectURL(url);
   }, [nodes, edges]);
 
+  const doDeleteSelected = useCallback(() => {
+    if (!selection) return;
+    const out = removeSelection(nodes, edges, selection);
+    setNodes(out.nodes);
+    setEdges(out.edges);
+    setSelection(null);
+  }, [selection, nodes, edges, setNodes, setEdges, setSelection]);
+
   const doValidate = useCallback(async () => {
     try {
       const res = await validateGraph(toWire(nodes, edges));
@@ -110,6 +118,9 @@ export function EditorShell() {
         <button onClick={() => setImporting(true)}>Import</button>
         <button onClick={doExport}>Export</button>
         <button onClick={doValidate}>Validate</button>
+        <button onClick={doDeleteSelected} disabled={!selection}>
+          Delete
+        </button>
         <span className={errors.length ? 'errcount errcount-bad' : 'errcount'}>{errors.length} errors</span>
       </header>
       <div className="main">

@@ -20,6 +20,22 @@ export function toWire(nodes: EditorNode[], edges: EditorEdge[]): WireGraph {
   return { StartAt, Nodes, Edges };
 }
 
+// Remove the selected element. Deleting a node also drops every edge touching
+// it (you can't have a dangling edge). Deleting an edge leaves nodes alone.
+export function removeSelection(
+  nodes: EditorNode[],
+  edges: EditorEdge[],
+  selection: { kind: 'node' | 'edge'; id: string },
+): { nodes: EditorNode[]; edges: EditorEdge[] } {
+  if (selection.kind === 'node') {
+    return {
+      nodes: nodes.filter((n) => n.id !== selection.id),
+      edges: edges.filter((e) => e.source !== selection.id && e.target !== selection.id),
+    };
+  }
+  return { nodes, edges: edges.filter((e) => e.id !== selection.id) };
+}
+
 // wire → canvas. Positions default to (0,0); autoLayout assigns real ones.
 // v1 limitation: EdgeSpec.Label (display-only) is not modeled on EdgeData and
 // is dropped on round-trip. Add a `label` field to EdgeData if the editor ever
