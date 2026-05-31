@@ -86,3 +86,22 @@ func TestHandler_ServesIndex(t *testing.T) {
 		t.Fatalf("index page not served, body: %q", string(body))
 	}
 }
+
+func TestHandler_MethodNotAllowed(t *testing.T) {
+	srv := httptest.NewServer(NewHandler())
+	defer srv.Close()
+
+	// /api/nodetypes only allows GET
+	resp, err := http.Post(srv.URL+"/api/nodetypes", "application/json",
+		strings.NewReader("{}"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusMethodNotAllowed {
+		t.Fatalf("POST /api/nodetypes status = %d, want 405", resp.StatusCode)
+	}
+	if ct := resp.Header.Get("Content-Type"); ct != "application/json" {
+		t.Fatalf("405 Content-Type = %q, want application/json", ct)
+	}
+}

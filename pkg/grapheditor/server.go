@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"io"
 	"io/fs"
+	"log"
 	"net/http"
 )
 
@@ -28,7 +29,7 @@ func NewHandler() http.Handler {
 
 func handleNodeTypes(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
 		return
 	}
 	writeJSON(w, http.StatusOK, BuildNodeTypeSchemas())
@@ -36,7 +37,7 @@ func handleNodeTypes(w http.ResponseWriter, r *http.Request) {
 
 func handleValidate(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
 		return
 	}
 	body, err := io.ReadAll(r.Body)
@@ -55,5 +56,7 @@ func handleValidate(w http.ResponseWriter, r *http.Request) {
 func writeJSON(w http.ResponseWriter, status int, v interface{}) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(v)
+	if err := json.NewEncoder(w).Encode(v); err != nil {
+		log.Printf("grapheditor: encode response: %v", err)
+	}
 }
