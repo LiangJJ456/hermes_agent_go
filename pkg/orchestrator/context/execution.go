@@ -66,6 +66,13 @@ func (ec *ExecutionContext) Fork() *ExecutionContext {
 		ConvMem:        ec.ConvMem,
 		TraceID:        ec.TraceID,
 		DefinitionName: ec.DefinitionName,
+		// Carry per-execution services so a forked context is usable on its own
+		// (the executor also re-stamps these in executeFrom, but copying here
+		// keeps Fork correct for any caller that doesn't route back through it).
+		LLMInvoker:  ec.LLMInvoker,
+		ToolInvoker: ec.ToolInvoker,
+		Executor:    ec.Executor,
+		Tracer:      ec.Tracer,
 	}
 	return child
 }
