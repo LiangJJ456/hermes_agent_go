@@ -7,6 +7,7 @@ A production-grade AI agent framework written in Go, featuring JSON-defined grap
 - [Architecture Overview](#architecture-overview)
 - [Prerequisites](#prerequisites)
 - [Quick Start](#quick-start)
+- [Visual Graph Editor](#visual-graph-editor)
 - [Environment Variables](#environment-variables)
 - [REPL Commands](#repl-commands)
 - [Project Structure](#project-structure)
@@ -157,6 +158,49 @@ Create `~/.hermes/mcp.json`:
 
 ---
 
+## Visual Graph Editor
+
+The orchestration graph is defined as JSON, but you don't have to hand-write it. Hermes ships a browser-based visual editor (`cmd/hermes-editor`) for building and validating graphs against the live node-type schema.
+
+### Run
+
+```bash
+go run ./cmd/hermes-editor   # serves on http://127.0.0.1:7390 by default
+# or: go build -o hermes-editor ./cmd/hermes-editor && ./hermes-editor -addr 127.0.0.1:7390
+```
+
+Open <http://127.0.0.1:7390/> in a browser. The editor is embedded into the binary (`//go:embed`), so no separate frontend server is needed.
+
+### Features
+
+- **Drag-and-drop canvas** (React Flow): drag node types from the palette onto the canvas; the first node dropped becomes the start node (`▶`).
+- **Connect & configure**: draw edges between node handles; a schema-driven inspector edits node config (string / number / bool / string-list / raw-JSON fields) and edge priority/condition.
+- **Delete**: select a node or edge and click **Delete** in the toolbar (or press `Delete` / `Backspace`). Deleting a node also removes its connected edges.
+- **Validate**: posts the graph to the backend; errors are listed in a panel and badged on the offending nodes — click an error to focus its element.
+- **Import / Export**: paste graph JSON to import (auto-laid-out via dagre) or download the current graph as `graph.json`.
+
+### Backend API
+
+The editor server exposes a same-origin JSON API (also usable standalone):
+
+| Endpoint | Description |
+|---|---|
+| `GET /api/nodetypes` | Node-type schemas: `[{type, fields:[{name, jsonName, type, optional}]}]` |
+| `POST /api/validate` | Validate a graph JSON body → `{valid, errors:[{path, message}]}` (an invalid graph still returns HTTP 200) |
+
+### Developing the frontend
+
+The frontend lives in `web/` (Vite + React + TypeScript, tested with Vitest). To rebuild the embedded assets:
+
+```bash
+make editor-ui          # = cd web && npm ci && npm run build
+# during development: cd web && npm run dev   (proxies /api to :7390)
+```
+
+`npm run build` emits into `pkg/grapheditor/static/`, which is committed and embedded by the Go build.
+
+---
+
 ## Environment Variables
 
 | Variable | Default | Description |
@@ -187,8 +231,13 @@ Any other input is treated as a natural-language message sent to the agent.
 
 ```
 hermes_agent_go/
-+-- cmd/hermes/
-|   +-- main.go                 # Entry point and REPL
++-- cmd/
+|   +-- hermes/
+|   |   +-- main.go             # Entry point and REPL
+|   +-- hermes-editor/
+|       +-- main.go             # Visual graph editor server (embedded UI)
++-- web/                        # Graph editor frontend (Vite + React + TS)
+|   +-- src/                    # Built into pkg/grapheditor/static/
 +-- pkg/
 |   +-- agent/
 |   |   +-- agent.go            # Core agent (graph executor based)
@@ -237,6 +286,11 @@ hermes_agent_go/
 |   |   |   +-- memory.go       # ConversationMemory / MemoryStore
 |   |   +-- schema/
 |   |       +-- pipe.go         # Pipe / StreamReader / StreamWriter
+|   +-- grapheditor/            # Graph editor backend (API + embedded UI)
+|   |   +-- server.go           # HTTP handler, static embed
+|   |   +-- schema.go           # GET /api/nodetypes schema reflection
+|   |   +-- validate.go         # POST /api/validate
+|   |   +-- static/             # Embedded Vite build output (committed)
 |   +-- model/
 |   |   +-- provider.go         # Model provider interface
 |   |   +-- router.go           # Multi-provider model router
