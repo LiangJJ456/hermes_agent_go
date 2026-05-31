@@ -6,6 +6,10 @@ interface Props {
   onChange: (v: unknown) => void;
 }
 export function RawJsonField({ label, value, onChange }: Props) {
+  // Initialized from `value` once, on mount. Callers MUST give the enclosing
+  // form a key tied to the edited entity's identity (e.g. key={nodeId}) so this
+  // remounts when the selection changes — otherwise stale JSON would persist
+  // and blurring could write it to the newly selected node.
   const [text, setText] = useState(() => JSON.stringify(value ?? null, null, 2));
   const [error, setError] = useState<string | null>(null);
 
