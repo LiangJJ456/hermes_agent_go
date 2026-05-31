@@ -32,7 +32,7 @@ export function Canvas({ nodes, edges, onNodesChange, onEdgesChange, onConnect, 
       e.preventDefault();
       const nodeType = e.dataTransfer.getData(NODE_TYPE_MIME);
       if (!nodeType) return;
-      const bounds = (e.target as HTMLElement).getBoundingClientRect();
+      const bounds = e.currentTarget.getBoundingClientRect();
       onDropNode(nodeType, { x: e.clientX - bounds.left, y: e.clientY - bounds.top });
     },
     [onDropNode],
