@@ -21,6 +21,9 @@ export function toWire(nodes: EditorNode[], edges: EditorEdge[]): WireGraph {
 }
 
 // wire → canvas. Positions default to (0,0); autoLayout assigns real ones.
+// v1 limitation: EdgeSpec.Label (display-only) is not modeled on EdgeData and
+// is dropped on round-trip. Add a `label` field to EdgeData if the editor ever
+// needs to preserve/display edge labels.
 export function fromWire(g: WireGraph): { nodes: EditorNode[]; edges: EditorEdge[] } {
   const nodes: EditorNode[] = Object.entries(g.Nodes ?? {}).map(([id, n]) => ({
     id,
