@@ -19,6 +19,12 @@ palace/
 
 # Superpowers brainstorming artifacts
 .superpowers/
+superpowers/
+
+# Planning / design docs (local-only)
+docs/
 
 # Claude Code
 .claude/
+
+.agents/
