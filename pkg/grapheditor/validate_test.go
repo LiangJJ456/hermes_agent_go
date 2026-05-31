@@ -46,6 +46,9 @@ func TestValidateGraph_BadCondition(t *testing.T) {
 	if !strings.Contains(joined, "edge 0") {
 		t.Fatalf("error message should reference edge 0, got: %q", joined)
 	}
+	if resp.Errors[0].Path != "<graph>" {
+		t.Fatalf("parse-level error path = %q, want \"<graph>\"", resp.Errors[0].Path)
+	}
 }
 
 func TestValidateGraph_DanglingEdge(t *testing.T) {
@@ -87,5 +90,26 @@ func TestValidateGraph_MissingStart(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("expected StartAt error about missing, got: %+v", resp.Errors)
+	}
+}
+
+func TestValidateGraph_EmptyStart(t *testing.T) {
+	bad := `{
+      "StartAt": "",
+      "Nodes": {"a": {"Type": "end", "Config": {"Status": "success"}}},
+      "Edges": []
+    }`
+	resp := ValidateGraph([]byte(bad))
+	if resp.Valid {
+		t.Fatal("expected invalid for empty StartAt")
+	}
+	found := false
+	for _, e := range resp.Errors {
+		if e.Path == "StartAt" && e.Message == "StartAt is empty" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected \"StartAt is empty\" error, got: %+v", resp.Errors)
 	}
 }

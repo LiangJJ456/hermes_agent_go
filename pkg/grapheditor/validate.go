@@ -21,8 +21,12 @@ type ValidateResponse struct {
 // ValidateGraph parses and structurally checks a graph JSON document.
 // Parse-level failures (structure, unknown node types, bad config, bad edge
 // conditions) surface from UnmarshalGraph as a single error with path
-// "<graph>". If parsing succeeds, structural checks (StartAt and edge
-// endpoints referencing existing nodes) run with precise paths.
+// "<graph>". If parsing succeeds, structural checks run: StartAt must name an
+// existing node, and every edge's non-empty From/To must name existing nodes.
+//
+// Known limitations (not yet validated): a blank edge From/To is accepted;
+// node-name references in Graph.OnError/OnTimeout, NodeSpec.Catch[].Next, and
+// choice-node ChoiceEntry.Next/Default are not checked against the node set.
 func ValidateGraph(body []byte) ValidateResponse {
 	g, err := orchestrator.UnmarshalGraph(body)
 	if err != nil {
@@ -32,18 +36,16 @@ func ValidateGraph(body []byte) ValidateResponse {
 		}
 	}
 
+	// non-nil so a valid graph serializes "errors":[] (not null) for the client
 	errs := []ValidationError{}
 
-	switch {
-	case g.StartAt == "":
+	if g.StartAt == "" {
 		errs = append(errs, ValidationError{Path: "StartAt", Message: "StartAt is empty"})
-	default:
-		if _, ok := g.Nodes[g.StartAt]; !ok {
-			errs = append(errs, ValidationError{
-				Path:    "StartAt",
-				Message: fmt.Sprintf("StartAt references unknown node %q", g.StartAt),
-			})
-		}
+	} else if _, ok := g.Nodes[g.StartAt]; !ok {
+		errs = append(errs, ValidationError{
+			Path:    "StartAt",
+			Message: fmt.Sprintf("StartAt references unknown node %q", g.StartAt),
+		})
 	}
 
 	for i, e := range g.Edges {
