@@ -76,3 +76,52 @@ func TestBuildNodeTypeSchemas_ToolAndChoice(t *testing.T) {
 		t.Fatalf("Default field wrong: %+v", f)
 	}
 }
+
+func TestParseJSONTag_DivergentName(t *testing.T) {
+	// json key differs from Go field name + omitempty present
+	name, optional := parseJSONTag("different_name,omitempty", "GoFieldName")
+	if name != "different_name" {
+		t.Fatalf("name = %q, want %q", name, "different_name")
+	}
+	if !optional {
+		t.Fatal("optional should be true when ,omitempty present")
+	}
+
+	// empty tag falls back to the Go field name, not optional
+	name, optional = parseJSONTag("", "GoFieldName")
+	if name != "GoFieldName" {
+		t.Fatalf("empty-tag name = %q, want %q", name, "GoFieldName")
+	}
+	if optional {
+		t.Fatal("optional should be false for empty tag")
+	}
+
+	// name omitted but options present (",omitempty") falls back to field name
+	name, optional = parseJSONTag(",omitempty", "GoFieldName")
+	if name != "GoFieldName" {
+		t.Fatalf("optionsonly name = %q, want %q", name, "GoFieldName")
+	}
+	if !optional {
+		t.Fatal("optional should be true for \",omitempty\"")
+	}
+}
+
+func TestBuildNodeTypeSchemas_RawComplexFields(t *testing.T) {
+	schemas := BuildNodeTypeSchemas()
+
+	parallel := findSchema(schemas, "parallel")
+	if parallel == nil {
+		t.Fatal("parallel schema missing")
+	}
+	if f := findField(parallel, "Branches"); f == nil || f.Type != "raw" {
+		t.Fatalf("Branches field wrong: %+v", f)
+	}
+
+	human := findSchema(schemas, "human")
+	if human == nil {
+		t.Fatal("human schema missing")
+	}
+	if f := findField(human, "Schema"); f == nil || f.Type != "raw" {
+		t.Fatalf("Schema field wrong: %+v", f)
+	}
+}
