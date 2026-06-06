@@ -274,6 +274,12 @@ func main() {
 	// SIGINT calls it to interrupt only the current run, leaving the REPL alive.
 	var runCancel atomic.Pointer[context.CancelFunc]
 
+	// lastInterrupt records when the last SIGINT (Ctrl+C) arrived. On Windows,
+	// Ctrl+C also makes the blocking stdin read return false with a nil error —
+	// indistinguishable from real EOF — so the stdin reader consults this to tell
+	// "Ctrl+C interrupted my read" apart from "stdin genuinely ended".
+	var lastInterrupt atomic.Int64
+
 	sigCh := make(chan os.Signal, 2)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
@@ -284,15 +290,15 @@ func main() {
 				cancel()
 				return
 			}
-			// SIGINT: cancel current run if active; otherwise exit.
+			// SIGINT (Ctrl+C): record the time so the stdin reader can tell this
+			// apart from EOF, then interrupt the current run if any. Never exits —
+			// use /quit to leave.
+			lastInterrupt.Store(time.Now().UnixNano())
 			if fn := runCancel.Load(); fn != nil {
 				(*fn)()
-				fmt.Fprintf(os.Stderr, "\n⚠️  Run interrupted (Ctrl+C again to exit)\n>>> ")
+				fmt.Fprintf(os.Stderr, "\n⚠️  已中断当前任务\n>>> ")
 			} else {
-				fmt.Fprintf(os.Stderr, "\n🛑 Interrupted\n")
-				doShutdown()
-				cancel()
-				return
+				fmt.Fprintf(os.Stderr, "\n(已中断;输入 /quit 退出)\n>>> ")
 			}
 		}
 	}()
@@ -304,12 +310,25 @@ func main() {
 	fmt.Printf("   Memory: %s/memories\n\n", hermesHome)
 
 	stdinCh := make(chan string, 1)
+	stdinEOF := make(chan struct{})
 	go func() {
-		scanner := bufio.NewScanner(os.Stdin)
-		for scanner.Scan() {
-			stdinCh <- scanner.Text()
+		for {
+			scanner := bufio.NewScanner(os.Stdin)
+			for scanner.Scan() {
+				stdinCh <- scanner.Text()
+			}
+			// Scan() returned false. On Windows, Ctrl+C interrupts the console
+			// read and returns false with Err()==nil — same as real EOF. The
+			// SIGINT signal arrives slightly later, so wait briefly and check: a
+			// recent interrupt means Ctrl+C (rebuild the scanner and keep
+			// reading); otherwise stdin genuinely ended and we stop.
+			time.Sleep(150 * time.Millisecond)
+			if time.Since(time.Unix(0, lastInterrupt.Load())) < 400*time.Millisecond {
+				continue
+			}
+			close(stdinEOF)
+			return
 		}
-		close(stdinCh)
 	}()
 
 	type agentResult struct {
@@ -344,10 +363,9 @@ func main() {
 	fmt.Print(">>> ")
 	for {
 		select {
-		case line, ok := <-stdinCh:
-			if !ok {
-				return // stdin closed
-			}
+		case <-stdinEOF:
+			return // stdin genuinely ended (piped input / Ctrl+Z)
+		case line := <-stdinCh:
 			input := strings.TrimSpace(line)
 			if input == "" {
 				if !isRunning {
