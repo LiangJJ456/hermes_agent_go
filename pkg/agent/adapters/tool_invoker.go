@@ -26,6 +26,13 @@ type RegistryAdapter struct {
 	MemoryMgr  *memory.Manager
 	Compressor CompressorInterface
 	CompressFn CompressFunc
+
+	// Background-tool wiring (injected by agent). When BackgroundAfter > 0 a
+	// standard tool that runs longer than it is moved to the background and its
+	// result is delivered later via Notify.
+	Notify          func(xml string)
+	BackgroundCtx   context.Context
+	BackgroundAfter time.Duration
 }
 
 func (a *RegistryAdapter) Invoke(ctx context.Context, resource string,
@@ -75,7 +82,7 @@ func (a *RegistryAdapter) Invoke(ctx context.Context, resource string,
 		}, nil
 	}
 
-	// Standard tool: serialize input to JSON and call registry
+	// Standard tool: serialize input to JSON and call registry.
 	argsJSON, err := json.Marshal(input)
 	if err != nil {
 		return &orchestrator.NodeResult{
@@ -84,23 +91,17 @@ func (a *RegistryAdapter) Invoke(ctx context.Context, resource string,
 		}, nil
 	}
 
-	ctxWithTO := ctx
+	// Explicit hard Timeout keeps the legacy cancel-on-timeout semantics.
 	if timeout > 0 {
-		var cancel context.CancelFunc
-		ctxWithTO, cancel = context.WithTimeout(ctx, time.Duration(timeout)*time.Second)
+		ctxWithTO, cancel := context.WithTimeout(ctx, time.Duration(timeout)*time.Second)
 		defer cancel()
+		output, err := a.Registry.Execute(ctxWithTO, resource, argsJSON)
+		if err != nil {
+			return &orchestrator.NodeResult{Status: orchestrator.StatusContinue, Output: fmt.Sprintf("Error: %v", err)}, nil
+		}
+		return &orchestrator.NodeResult{Status: orchestrator.StatusContinue, Output: output}, nil
 	}
 
-	output, err := a.Registry.Execute(ctxWithTO, resource, argsJSON)
-	if err != nil {
-		return &orchestrator.NodeResult{
-			Status: orchestrator.StatusContinue,
-			Output: fmt.Sprintf("Error: %v", err),
-		}, nil
-	}
-
-	return &orchestrator.NodeResult{
-		Status: orchestrator.StatusContinue,
-		Output: output,
-	}, nil
+	// No hard timeout: soft-timeout-to-background.
+	return runStandardTool(ctx, a.BackgroundCtx, a.BackgroundAfter, a.Notify, resource, argsJSON, a.Registry.Execute)
 }
