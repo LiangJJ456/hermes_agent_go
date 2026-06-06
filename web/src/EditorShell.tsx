@@ -1,6 +1,7 @@
 import { useCallback, useState } from 'react';
 import { ReactFlowProvider, useNodesState, useEdgesState, addEdge, applyNodeChanges, type Connection, type NodeChange, type EdgeChange } from '@xyflow/react';
-import { validateGraph } from './api/client';
+import { validateGraph, generateGraph, ApiError } from './api/client';
+import { AiPanel } from './components/AiPanel';
 import { toWire, fromWire, removeSelection, type EditorNode, type EditorEdge } from './model/graph';
 import { autoLayout } from './model/layout';
 import { mapError, type ErrorTarget } from './model/errors';
@@ -19,6 +20,10 @@ export function EditorShell() {
   const [nodes, setNodes, onNodesChange] = useNodesState<EditorNode>([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState<EditorEdge>([]);
   const [importing, setImporting] = useState(false);
+  const [aiBusy, setAiBusy] = useState(false);
+  const [aiError, setAiError] = useState<string | null>(null);
+  const [aiNotes, setAiNotes] = useState<string | null>(null);
+  const [aiSnapshot, setAiSnapshot] = useState<{ nodes: EditorNode[]; edges: EditorEdge[] } | null>(null);
 
   const errorNodeIds = new Set(
     errors
@@ -72,6 +77,45 @@ export function EditorShell() {
     setEdges(out.edges);
     setSelection(null);
   }, [selection, nodes, edges, setNodes, setEdges, setSelection]);
+
+  const doGenerate = useCallback(
+    async (instruction: string) => {
+      setAiBusy(true);
+      setAiError(null);
+      setAiNotes(null);
+      try {
+        const current = nodes.length > 0 ? toWire(nodes, edges) : undefined;
+        const res = await generateGraph(instruction, current);
+        setAiSnapshot({ nodes, edges }); // snapshot BEFORE replacing
+        const { nodes: n, edges: e } = fromWire(res.graph);
+        setNodes(autoLayout(n, e));
+        setEdges(e);
+        setErrors(res.errors);
+        setSelection(null);
+        setAiNotes(
+          res.valid
+            ? res.notes ?? `已生成(${n.length} 个节点)`
+            : `已生成,但有 ${res.errors.length} 处问题,可手动修正或重试`,
+        );
+      } catch (err) {
+        const status = err instanceof ApiError ? err.status : 0;
+        if (status === 503) setAiError('未配置模型,请设置 OPENAI_API_KEY / HERMES_MODEL');
+        else setAiError(`生成失败:${(err as Error).message}`);
+      } finally {
+        setAiBusy(false);
+      }
+    },
+    [nodes, edges, setNodes, setEdges, setErrors, setSelection],
+  );
+
+  const doAiUndo = useCallback(() => {
+    if (!aiSnapshot) return;
+    setNodes(aiSnapshot.nodes);
+    setEdges(aiSnapshot.edges);
+    setErrors([]);
+    setAiSnapshot(null);
+    setAiNotes(null);
+  }, [aiSnapshot, setNodes, setEdges, setErrors]);
 
   const doValidate = useCallback(async () => {
     try {
@@ -137,6 +181,14 @@ export function EditorShell() {
           />
         </ReactFlowProvider>
         <div className="rightpane">
+          <AiPanel
+            onSubmit={doGenerate}
+            busy={aiBusy}
+            error={aiError}
+            notes={aiNotes}
+            canUndo={aiSnapshot !== null}
+            onUndo={doAiUndo}
+          />
           <Inspector
             selection={selection}
             nodes={nodes}
