@@ -86,6 +86,10 @@ type AIAgent struct {
 	pendingNotifs []string      // 子 agent 完成通知队列，受 mu 保护
 	notifCh       chan struct{} // 信号 channel，buffered(1)
 
+	// 后台工具上下文
+	bgCtx    context.Context
+	bgCancel context.CancelFunc
+
 	// 规划系统
 	todoStore *builtin.TodoStore
 
@@ -146,6 +150,8 @@ func NewAIAgent(cfg types.AgentConfig, router *model.Router, reg *registry.Regis
 		notifCh:       make(chan struct{}, 1),
 	}
 
+	a.bgCtx, a.bgCancel = context.WithCancel(context.Background())
+
 	// Build adapters
 	a.llmInvoker = &adapters.RouterAdapter{
 		Router:    router,
@@ -154,8 +160,11 @@ func NewAIAgent(cfg types.AgentConfig, router *model.Router, reg *registry.Regis
 		MemoryMgr: nil, // set after SetMemoryManager
 	}
 	a.toolInvoker = &adapters.RegistryAdapter{
-		Registry:  reg,
-		MemoryMgr: nil, // set after SetMemoryManager
+		Registry:        reg,
+		MemoryMgr:       nil, // set after SetMemoryManager
+		Notify:          a.AddNotification,
+		BackgroundCtx:   a.bgCtx,
+		BackgroundAfter: time.Duration(cfg.ToolBackgroundAfter) * time.Second,
 	}
 
 	a.executor.LLMInvoker = a.llmInvoker
@@ -454,6 +463,9 @@ func (a *AIAgent) Resume(ctx context.Context, humanResponse interface{}) (string
 
 // Shutdown 清理退出
 func (a *AIAgent) Shutdown() {
+	if a.bgCancel != nil {
+		a.bgCancel()
+	}
 	// 通知记忆系统会话结束
 	if a.memoryMgr != nil {
 		msgMaps := messagesToMaps(a.GetMessages())
