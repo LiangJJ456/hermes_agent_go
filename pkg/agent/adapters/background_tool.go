@@ -62,6 +62,7 @@ func runStandardTool(
 	case <-time.After(after):
 		go func() {
 			res := <-done
+			toolCancel() // tool finished in the background; release its ctx now
 			if notify != nil {
 				notify(buildToolNotification(resource, args, res.out, res.err))
 			}
