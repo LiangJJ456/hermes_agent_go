@@ -562,13 +562,6 @@ func (a *AIAgent) AddNotification(xml string) {
 // async notification is enqueued. Consumers should call Run(ctx, "") to process it.
 func (a *AIAgent) NotifCh() <-chan struct{} { return a.notifCh }
 
-func truncateResult(s string, maxLen int) string {
-	if len(s) <= maxLen {
-		return s
-	}
-	return s[:maxLen] + "..."
-}
-
 // ── 子 Agent 支持 ──
 
 // NewChildAgent 创建子 Agent（用于 delegate_task）
