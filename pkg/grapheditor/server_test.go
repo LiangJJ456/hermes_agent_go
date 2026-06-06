@@ -1,6 +1,8 @@
 package grapheditor
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -9,10 +11,11 @@ import (
 	"testing"
 
 	_ "code.byted.org/ad_creative/hermes_agent_go/pkg/orchestrator/runner"
+	"code.byted.org/ad_creative/hermes_agent_go/pkg/types"
 )
 
 func TestHandler_NodeTypes(t *testing.T) {
-	srv := httptest.NewServer(NewHandler())
+	srv := httptest.NewServer(NewHandler(nil))
 	defer srv.Close()
 
 	resp, err := http.Get(srv.URL + "/api/nodetypes")
@@ -33,7 +36,7 @@ func TestHandler_NodeTypes(t *testing.T) {
 }
 
 func TestHandler_ValidateOK(t *testing.T) {
-	srv := httptest.NewServer(NewHandler())
+	srv := httptest.NewServer(NewHandler(nil))
 	defer srv.Close()
 
 	resp, err := http.Post(srv.URL+"/api/validate", "application/json",
@@ -55,7 +58,7 @@ func TestHandler_ValidateOK(t *testing.T) {
 }
 
 func TestHandler_ValidateNonJSON(t *testing.T) {
-	srv := httptest.NewServer(NewHandler())
+	srv := httptest.NewServer(NewHandler(nil))
 	defer srv.Close()
 
 	resp, err := http.Post(srv.URL+"/api/validate", "text/plain",
@@ -70,7 +73,7 @@ func TestHandler_ValidateNonJSON(t *testing.T) {
 }
 
 func TestHandler_ServesIndex(t *testing.T) {
-	srv := httptest.NewServer(NewHandler())
+	srv := httptest.NewServer(NewHandler(nil))
 	defer srv.Close()
 
 	resp, err := http.Get(srv.URL + "/")
@@ -88,7 +91,7 @@ func TestHandler_ServesIndex(t *testing.T) {
 }
 
 func TestHandler_MethodNotAllowed(t *testing.T) {
-	srv := httptest.NewServer(NewHandler())
+	srv := httptest.NewServer(NewHandler(nil))
 	defer srv.Close()
 
 	// /api/nodetypes only allows GET
@@ -103,5 +106,44 @@ func TestHandler_MethodNotAllowed(t *testing.T) {
 	}
 	if ct := resp.Header.Get("Content-Type"); ct != "application/json" {
 		t.Fatalf("405 Content-Type = %q, want application/json", ct)
+	}
+}
+
+func TestGenerate_NotConfigured(t *testing.T) {
+	srv := httptest.NewServer(NewHandler(nil))
+	defer srv.Close()
+	resp, err := http.Post(srv.URL+"/api/generate", "application/json",
+		bytes.NewReader([]byte(`{"instruction":"x"}`)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("want 503, got %d", resp.StatusCode)
+	}
+}
+
+func TestGenerate_Success(t *testing.T) {
+	chat := func(_ context.Context, _ []types.Message) (string, error) {
+		return `{"StartAt":"a","Nodes":{"a":{"Type":"end","Config":{}}},"Edges":[]}`, nil
+	}
+	gen := NewGraphGenerator(chat, BuildNodeTypeSchemas(), 1)
+	srv := httptest.NewServer(NewHandler(gen))
+	defer srv.Close()
+	resp, err := http.Post(srv.URL+"/api/generate", "application/json",
+		bytes.NewReader([]byte(`{"instruction":"make end"}`)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("want 200, got %d", resp.StatusCode)
+	}
+	var res GenerateResult
+	if err := json.NewDecoder(resp.Body).Decode(&res); err != nil {
+		t.Fatal(err)
+	}
+	if !res.Valid {
+		t.Fatalf("expected valid result")
 	}
 }
