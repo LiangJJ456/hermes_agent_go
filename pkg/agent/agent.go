@@ -193,6 +193,10 @@ func (a *AIAgent) SetMemoryContext(memCtx string) {
 // 父子 agent 可共享同一个 SkillManager，互不干扰。
 func (a *AIAgent) SetSkillManager(sm *builtin.SkillManager) {
 	a.skillMgr = sm
+	// Route the skills tool's per-agent actions (activate/deactivate/read)
+	// through this agent; otherwise they hit the registry's list-only fallback
+	// handler and error with "requires an agent context".
+	a.toolInvoker.SkillsFn = a.handleSkillsCall
 }
 
 // setSkillActive 更新本 agent 的激活集合，并就地刷新 system prompt 中的 skill 块。
