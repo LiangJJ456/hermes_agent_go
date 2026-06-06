@@ -173,6 +173,7 @@ Open <http://127.0.0.1:7390/> in a browser. The editor is embedded into the bina
 
 ### Features
 
+- **AI generate** (right-side panel): describe a workflow in natural language; the backend asks an LLM to build the graph, validates it (self-correcting up to 2 rounds), and renders it onto the canvas — works from scratch or iterating on the current graph, with one-click undo. Reuses the hermes model config; the panel shows a hint when no model is configured.
 - **Drag-and-drop canvas** (React Flow): drag node types from the palette onto the canvas; the first node dropped becomes the start node (`▶`).
 - **Connect & configure**: draw edges between node handles; a schema-driven inspector edits node config (string / number / bool / string-list / raw-JSON fields) and edge priority/condition.
 - **Delete**: select a node or edge and click **Delete** in the toolbar (or press `Delete` / `Backspace`). Deleting a node also removes its connected edges.
@@ -187,6 +188,7 @@ The editor server exposes a same-origin JSON API (also usable standalone):
 |---|---|
 | `GET /api/nodetypes` | Node-type schemas: `[{type, fields:[{name, jsonName, type, optional}]}]` |
 | `POST /api/validate` | Validate a graph JSON body → `{valid, errors:[{path, message}]}` (an invalid graph still returns HTTP 200) |
+| `POST /api/generate` | LLM-build/modify a graph from `{instruction, graph?}` → `{graph, valid, errors, attempts, notes}` (returns 503 when no model is configured) |
 
 ### Developing the frontend
 
@@ -210,6 +212,7 @@ make editor-ui          # = cd web && npm ci && npm run build
 | `HERMES_MODEL` | `openai/gpt-4o` | Model in `provider/model` format. Prefix `deepseek/` selects the DeepSeek provider; otherwise the OpenAI-compatible provider is used |
 | `HERMES_HOME` | `~/.hermes` | Root directory for config, memories, palace data |
 | `HERMES_MEMPALACE` | `1` (enabled) | Set to `0` to disable the MemPalace provider |
+| `HERMES_TOOL_BG_AFTER` | `30` (seconds) | A tool running longer than this auto-moves to the background; its result is delivered later as a notification. `0` uses the default; a negative value disables backgrounding. Tools with an explicit `Timeout` keep hard-timeout semantics. |
 
 ---
 
@@ -224,6 +227,11 @@ make editor-ui          # = cd web && npm ci && npm run build
 | `/mcp` | List connected MCP servers and their registered tools |
 
 Any other input is treated as a natural-language message sent to the agent.
+
+**Interrupting & long-running tools:**
+
+- Press **Ctrl+C** to interrupt the current run — the LLM and any foreground tools are cancelled and you return to the prompt. It does **not** exit the program; use `/quit` to exit. (On Windows the REPL distinguishes Ctrl+C from a real stdin EOF, so the program stays alive.)
+- A tool running longer than `HERMES_TOOL_BG_AFTER` (default 30s) automatically moves to the **background**: the turn finishes with a placeholder so you can keep interacting, and the tool's result arrives later as an `[async]` notification.
 
 ---
 
