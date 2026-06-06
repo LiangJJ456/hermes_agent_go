@@ -84,17 +84,41 @@ func extractDescription(path string) string {
 	if err != nil {
 		return ""
 	}
-	for _, line := range strings.Split(string(data), "\n") {
+	lines := strings.Split(string(data), "\n")
+
+	// YAML frontmatter: a SKILL.md starting with "---" carries metadata; read
+	// the `description:` field from inside the frontmatter block.
+	if len(lines) > 0 && strings.TrimSpace(lines[0]) == "---" {
+		for _, line := range lines[1:] {
+			t := strings.TrimSpace(line)
+			if t == "---" {
+				break // end of frontmatter
+			}
+			if rest, ok := strings.CutPrefix(t, "description:"); ok {
+				return clampDesc(strings.TrimSpace(rest))
+			}
+		}
+	}
+
+	// Fallback: first non-empty, non-heading, non-delimiter line.
+	for _, line := range lines {
 		line = strings.TrimSpace(line)
-		if line == "" || strings.HasPrefix(line, "#") {
+		if line == "" || line == "---" || strings.HasPrefix(line, "#") {
 			continue
 		}
-		if len(line) > 120 {
-			return line[:120] + "..."
-		}
-		return line
+		return clampDesc(line)
 	}
 	return ""
+}
+
+// clampDesc truncates a description to 120 runes (rune-safe so multibyte
+// characters such as CJK are never split).
+func clampDesc(s string) string {
+	r := []rune(s)
+	if len(r) > 120 {
+		return string(r[:120]) + "..."
+	}
+	return s
 }
 
 // Lookup 按名称返回已发现的 skill 信息。
