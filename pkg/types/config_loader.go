@@ -94,6 +94,15 @@ func LoadConfig() AgentConfig {
 			cfg.MaxParallelTools = n
 		}
 	}
+	if v := os.Getenv("HERMES_TOOL_BG_AFTER"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			cfg.ToolBackgroundAfter = n
+		}
+	}
+
+	if cfg.ToolBackgroundAfter == 0 {
+		cfg.ToolBackgroundAfter = 30
+	}
 
 	return cfg
 }

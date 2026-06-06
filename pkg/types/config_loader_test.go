@@ -24,3 +24,20 @@ func TestLoadConfig_GraphPathFromFile(t *testing.T) {
 		t.Fatalf("expected GraphPath from config file, got %q", cfg.GraphPath)
 	}
 }
+
+func TestLoadConfig_ToolBackgroundAfterDefault(t *testing.T) {
+	os.Unsetenv("HERMES_TOOL_BG_AFTER")
+	cfg := LoadConfig()
+	if cfg.ToolBackgroundAfter != 30 {
+		t.Fatalf("default ToolBackgroundAfter should be 30, got %d", cfg.ToolBackgroundAfter)
+	}
+}
+
+func TestLoadConfig_ToolBackgroundAfterEnv(t *testing.T) {
+	os.Setenv("HERMES_TOOL_BG_AFTER", "5")
+	defer os.Unsetenv("HERMES_TOOL_BG_AFTER")
+	cfg := LoadConfig()
+	if cfg.ToolBackgroundAfter != 5 {
+		t.Fatalf("env should override to 5, got %d", cfg.ToolBackgroundAfter)
+	}
+}

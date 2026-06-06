@@ -13,7 +13,7 @@ type AgentConfig struct {
 	CustomProviders []CustomProviderConfig `json:"custom_providers" yaml:"custom_providers"`
 
 	// Agent 行为
-	MaxIterations   int      `json:"max_iterations" yaml:"max_iterations"` // 默认 90
+	MaxIterations   int      `json:"max_iterations" yaml:"max_iterations"` // 默认 180
 	EnabledToolsets []string `json:"enabled_toolsets" yaml:"enabled_toolsets"`
 	DisabledTools   []string `json:"disabled_tools" yaml:"disabled_tools"`
 	Platform        string   `json:"platform" yaml:"platform"` // cli/telegram/discord...
@@ -29,6 +29,10 @@ type AgentConfig struct {
 
 	// 并行
 	MaxParallelTools int `json:"max_parallel_tools" yaml:"max_parallel_tools"` // 默认 8
+
+	// ToolBackgroundAfter 标准工具执行超过该秒数自动转后台(默认 30)。
+	// 0 = 用默认值;负数 = 禁用转后台(纯阻塞)。
+	ToolBackgroundAfter int `json:"tool_background_after" yaml:"tool_background_after"`
 
 	// 子 Agent
 	DelegateMaxIterations int `json:"delegate_max_iterations" yaml:"delegate_max_iterations"` // 默认 50
@@ -55,7 +59,7 @@ func DefaultAgentConfig() AgentConfig {
 		Model:                 "openai/gpt-4o",
 		Temperature:           0.7,
 		MaxTokens:             16384,
-		MaxIterations:         90,
+		MaxIterations:         180,
 		MaxParallelTools:      8,
 		DelegateMaxIterations: 50,
 		MaxDelegateDepth:      2,
