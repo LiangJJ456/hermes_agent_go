@@ -48,7 +48,7 @@ const defaultGraphJSON = `{
   "Edges": [
     {"From": "llm", "To": "route", "Priority": 0},
     {"From": "dispatch_tools", "To": "llm", "Priority": 0},
-    {"From": "compress", "To": "llm", "Priority": 0},
+    {"From": "compress", "To": "end", "Priority": 0},
     {"From": "wait_and_retry", "To": "llm", "Priority": 0}
   ]
 }`

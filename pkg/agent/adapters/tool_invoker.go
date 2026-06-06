@@ -47,20 +47,18 @@ func (a *RegistryAdapter) Invoke(ctx context.Context, resource string,
 		}, nil
 	}
 
-	// Compress context tool
+	// Compress context tool. Compression is a side effect on the conversation
+	// history; this node must NOT overwrite WorkMem.LastResult — returning a nil
+	// Output keeps the llm node's final reply as LastResult, so the graph carries
+	// it to `end` (compress -> end) and returns it to the user, instead of
+	// re-running the llm and re-executing the request.
 	if resource == "builtin/compress_context" {
 		if a.CompressFn != nil {
-			if err := a.CompressFn(ctx); err != nil {
-				return &orchestrator.NodeResult{
-					Status: orchestrator.StatusContinue,
-					Output: fmt.Sprintf("compression failed: %v", err),
-				}, nil
-			}
+			// Best-effort: a failure is already logged inside Compress (which
+			// degrades gracefully) and must not block returning the reply.
+			_ = a.CompressFn(ctx)
 		}
-		return &orchestrator.NodeResult{
-			Status: orchestrator.StatusContinue,
-			Output: "context compressed",
-		}, nil
+		return &orchestrator.NodeResult{Status: orchestrator.StatusContinue, Output: nil}, nil
 	}
 
 	// Check memory tools
